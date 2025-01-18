@@ -14,7 +14,9 @@ def cli():
     pass
 
 
-def display_image(image_path: str | Path, window_name: str = "Image", add_text: str = "") -> None:
+def display_image(
+    image_path: str | Path, window_name: str = "Image", add_text: str = ""
+) -> None:
     """Display an image using OpenCV or PIL.
 
     Args:
@@ -28,7 +30,7 @@ def display_image(image_path: str | Path, window_name: str = "Image", add_text: 
     img = cv2.imread(str(image_path))
     if add_text:
         modify.add_text(img, add_text)
-        
+
     cv2.imshow(window_name, img)
     cv2.waitKey(0)  # Wait for key press
     cv2.destroyAllWindows()
