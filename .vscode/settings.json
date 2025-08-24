@@ -27,6 +27,7 @@
     "cSpell.words": [
         "imread",
         "imshow",
+        "ndarray",
         "puremagic"
     ]
 }

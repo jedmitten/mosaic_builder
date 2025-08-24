@@ -1,0 +1,5 @@
+[mosaic_builder]
+photos_src = "/path/to/photos_src"
+store_url  = "duckdb:///mosaic.duckdb"
+index_path = "tiles_kdtree.joblib"
+tile_px    = 24

@@ -232,6 +232,7 @@ dependencies = [
 dev = [
     { name = "autopep8" },
     { name = "black" },
+    { name = "coverage" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -254,6 +255,7 @@ requires-dist = [
 dev = [
     { name = "autopep8", specifier = ">=2.3.2" },
     { name = "black", specifier = ">=24.10.0" },
+    { name = "coverage", specifier = ">=7.6.10" },
     { name = "pre-commit", specifier = ">=4.0.1" },
     { name = "pytest", specifier = ">=8.3.4" },
     { name = "pytest-asyncio", specifier = ">=0.25.2" },

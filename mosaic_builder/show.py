@@ -5,7 +5,7 @@ from typing import Union
 import click
 
 from mosaic_builder.collection import fetch_image_files_from_path
-from mosaic_builder import modify
+from mosaic_builder import modify, image_stats
 
 
 @click.group()
@@ -40,7 +40,8 @@ def display_image(
 @click.argument("image_path", type=click.Path(exists=True))
 @click.option("--window-name", "-w", default="Image", help="Window name for display")
 def show_image(image_path: str, window_name: str):
-    """Display an image file using OpenCV."""
+    img_weight = image_stats.get_image_color_weight(image_path)
+    text += "Press any key to close"
     display_image(image_path, window_name, add_text="Press any key to close")
 
 
