@@ -1,9 +1,10 @@
 from pathlib import Path
+
 import joblib
 import numpy as np
 from scipy.spatial import cKDTree
+
 from mosaic_builder.stores.factory import open_store
-import matplotlib.pyplot as plt
 
 
 def build_kdtree(store_url: str, index_path: Path, debug_dir: Path | None = None):
@@ -18,11 +19,16 @@ def build_kdtree(store_url: str, index_path: Path, debug_dir: Path | None = None
     )
 
     if debug_dir:
-        debug_dir.mkdir(parents=True, exist_ok=True)
-        plt.figure(figsize=(5, 4))
-        plt.scatter(vecs[:, 1], vecs[:, 2], c=vecs[:, 0], cmap="gray", s=3)
-        plt.xlabel("a*")
-        plt.ylabel("b*")
-        plt.title("Tile colors (Lab)")
-        plt.savefig(debug_dir / "tile_lab_scatter.png")
-        plt.close()
+        try:
+            import matplotlib.pyplot as plt
+
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            plt.figure(figsize=(5, 4))
+            plt.scatter(vecs[:, 1], vecs[:, 2], c=vecs[:, 0], cmap="gray", s=3)
+            plt.xlabel("a*")
+            plt.ylabel("b*")
+            plt.title("Tile colors (Lab)")
+            plt.savefig(debug_dir / "tile_lab_scatter.png")
+            plt.close()
+        except ImportError:
+            print("[mosaic-builder] matplotlib not installed; skipping scatter plot.")

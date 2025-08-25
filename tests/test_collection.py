@@ -1,5 +1,6 @@
-from mosaic_builder.collection import is_image
 from pathlib import Path
+
+from mosaic_builder.collection import is_image
 
 
 def test_is_image(gallery_files):

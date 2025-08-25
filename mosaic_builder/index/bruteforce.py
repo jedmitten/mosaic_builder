@@ -1,5 +1,6 @@
 import numpy as np
-from mosaic_builder.index.base import VectorIndex, SearchResult, Array
+
+from mosaic_builder.index.base import Array, SearchResult, VectorIndex
 
 
 class BruteForceIndex(VectorIndex):

@@ -1,4 +1,5 @@
 import numpy as np
+
 from mosaic_builder.index.factory import make_index
 
 

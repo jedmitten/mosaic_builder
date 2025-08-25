@@ -1,11 +1,13 @@
 from __future__ import annotations
+
 from pathlib import Path
+
 import typer
 
-from mosaic_builder.config import load_config, AppConfig
-from mosaic_builder.pipeline.ingest import ingest_dir
+from mosaic_builder.config import AppConfig, load_config
 from mosaic_builder.index.build_index import build_kdtree
 from mosaic_builder.pipeline.build_mosaic import build_mosaic
+from mosaic_builder.pipeline.ingest import ingest_dir
 
 app = typer.Typer(add_completion=False)
 

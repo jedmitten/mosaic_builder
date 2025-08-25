@@ -1,32 +1,26 @@
-from __future__ import annotations
-from urllib.parse import urlparse
 from pathlib import Path
+from urllib.parse import urlparse
+
 from mosaic_builder.stores.sql_store import SqlTileStore
 
 
 def open_store(url: str):
-    """
-    url examples:
-      sqlite:///mosaic.db
-      duckdb:///mosaic.duckdb
-    """
     parsed = urlparse(url)
     scheme = parsed.scheme.lower()
-    path = Path(parsed.path.lstrip("/")) if parsed.path else Path("mosaic.db")
+    path = Path(parsed.path.lstrip("/")) or Path("mosaic.db")
 
     if scheme == "sqlite":
         import sqlite3
 
         conn = sqlite3.connect(path)
-        # speed ups for local, safe single-user workloads:
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
-        return SqlTileStore(conn)
+        return SqlTileStore(conn, engine="sqlite")
 
     if scheme == "duckdb":
-        import duckdb  # optional extra
+        import duckdb
 
         conn = duckdb.connect(str(path))
-        return SqlTileStore(conn)
+        return SqlTileStore(conn, engine="duckdb")
 
     raise ValueError(f"Unsupported store URL scheme: {scheme}")

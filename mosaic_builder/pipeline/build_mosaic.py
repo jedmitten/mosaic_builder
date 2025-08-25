@@ -1,8 +1,10 @@
 from pathlib import Path
+
+import joblib
 import numpy as np
 from PIL import Image, ImageOps
 from skimage.color import rgb2lab
-import joblib
+
 from mosaic_builder.stores.factory import open_store
 
 
