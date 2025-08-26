@@ -14,7 +14,6 @@ class SqlTileStore:
     def ensure_schema(self) -> None:
         cur = self.conn.cursor()
         if self.engine == "sqlite":
-            # tables
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS photos (
@@ -40,17 +39,9 @@ class SqlTileStore:
                 );
             """
             )
-            # unique index to make ingest idempotent
-            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS tiles_photo_xy_unique ON tiles(photo_id, x, y);")
-            # helpful index for lookups
-            cur.execute("CREATE INDEX IF NOT EXISTS tiles_photo_id_idx ON tiles(photo_id);")
-
         else:  # duckdb
-            # sequences (older/newer DuckDB friendly)
             cur.execute("CREATE SEQUENCE IF NOT EXISTS photos_id_seq START 1;")
             cur.execute("CREATE SEQUENCE IF NOT EXISTS tiles_id_seq START 1;")
-
-            # tables
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS photos (
@@ -76,10 +67,41 @@ class SqlTileStore:
                 );
             """
             )
-            # unique index for idempotency + lookup index
-            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS tiles_photo_xy_unique ON tiles(photo_id, x, y);")
-            cur.execute("CREATE INDEX IF NOT EXISTS tiles_photo_id_idx ON tiles(photo_id);")
+        self.conn.commit()
 
+    # --- create INDEXES (safe to run after data is clean) ---
+    def ensure_indexes(self) -> None:
+        cur = self.conn.cursor()
+        # unique index for idempotency + lookup index
+        cur.execute("CREATE INDEX IF NOT EXISTS tiles_photo_id_idx ON tiles(photo_id);")
+        # Unique can fail if duplicates exist; caller should wipe/drop before calling.
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS tiles_photo_xy_unique ON tiles(photo_id, x, y);")
+        self.conn.commit()
+
+    def wipe_all(self) -> None:
+        """Delete all rows; keep schema. Tolerant if tables don't exist."""
+        cur = self.conn.cursor()
+        for tbl in ("tiles", "photos"):
+            try:
+                cur.execute(f"DELETE FROM {tbl};")
+            except Exception:
+                pass
+        if self.engine == "duckdb":
+            try:
+                cur.execute("ALTER SEQUENCE tiles_id_seq RESTART WITH 1;")
+                cur.execute("ALTER SEQUENCE photos_id_seq RESTART WITH 1;")
+            except Exception:
+                pass
+        self.conn.commit()
+
+    def drop_all(self) -> None:
+        """Drop tables (and sequences on DuckDB). Safe if they don't exist."""
+        cur = self.conn.cursor()
+        cur.execute("DROP TABLE IF EXISTS tiles;")
+        cur.execute("DROP TABLE IF EXISTS photos;")
+        if self.engine == "duckdb":
+            cur.execute("DROP SEQUENCE IF NOT EXISTS tiles_id_seq;")
+            cur.execute("DROP SEQUENCE IF NOT EXISTS photos_id_seq;")
         self.conn.commit()
 
     def upsert_photo(self, path: Path, width: int, height: int) -> int:
@@ -146,28 +168,3 @@ class SqlTileStore:
             self.conn.close()
         except Exception:
             pass
-
-    def wipe_all(self) -> None:
-        """Delete all rows; keep schema. Also reset sequences if DuckDB."""
-        cur = self.conn.cursor()
-        cur.execute("DELETE FROM tiles;")
-        cur.execute("DELETE FROM photos;")
-        if self.engine == "duckdb":
-            # Reset identity sequences if present; ignore if they don't exist
-            try:
-                cur.execute("ALTER SEQUENCE tiles_id_seq RESTART WITH 1;")
-                cur.execute("ALTER SEQUENCE photos_id_seq RESTART WITH 1;")
-            except Exception:
-                pass
-        self.conn.commit()
-
-    def drop_all(self) -> None:
-        """Drop tables (and sequences on DuckDB)."""
-        cur = self.conn.cursor()
-        # Drop child first
-        cur.execute("DROP TABLE IF EXISTS tiles;")
-        cur.execute("DROP TABLE IF EXISTS photos;")
-        if self.engine == "duckdb":
-            cur.execute("DROP SEQUENCE IF NOT EXISTS tiles_id_seq;")
-            cur.execute("DROP SEQUENCE IF NOT EXISTS photos_id_seq;")
-        self.conn.commit()

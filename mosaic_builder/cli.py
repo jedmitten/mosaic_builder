@@ -124,12 +124,15 @@ def reset_db(
     s = open_store(store)
     try:
         if mode == "wipe":
-            s.wipe_all()
-            typer.echo("[mosaic-builder] Database wiped (rows deleted, schema kept).")
+            s.wipe_all()  # 1) clear data first
+            s.ensure_schema()  # 2) make sure tables exist
+            s.ensure_indexes()  # 3) (re)create indexes now that data is clean
+            typer.echo("[mosaic-builder] Database wiped (rows deleted), schema & indexes ensured.")
         elif mode == "drop":
             s.drop_all()
             s.ensure_schema()
-            typer.echo("[mosaic-builder] Database dropped and recreated.")
+            s.ensure_indexes()
+            typer.echo("[mosaic-builder] Database dropped and recreated (schema + indexes).")
         else:
             raise typer.BadParameter('mode must be "wipe" or "drop"')
     finally:
