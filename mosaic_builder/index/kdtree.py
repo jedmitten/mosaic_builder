@@ -2,7 +2,7 @@
 import numpy as np
 from scipy.spatial import cKDTree
 
-from mosaic_builder.index.base import Array, SearchResult, VectorIndex
+from mosaic_builder.index.base import MatrixF32, SearchResult, VectorF32, VectorIndex
 
 
 class KDTreeIndex(VectorIndex):
@@ -14,20 +14,18 @@ class KDTreeIndex(VectorIndex):
         self.metric = "euclidean"
         self.leaf_size = leaf_size  # kept for API symmetry; cKDTree ignores it
         self.tree: cKDTree | None = None
-        self.vectors: Array | None = None
+        self.vectors: MatrixF32 | None = None
 
-    def build(self, vectors: Array) -> None:
+    def build(self, vectors: MatrixF32) -> None:
         self.vectors = np.ascontiguousarray(vectors, dtype=np.float32)
         self.tree = cKDTree(self.vectors)
 
-    def query(self, vec: Array, k: int = 1) -> SearchResult:
+    def query(self, vec: VectorF32, k: int = 1) -> SearchResult:
         assert self.tree is not None
         dist, idx = self.tree.query(vec.reshape(1, -1), k=k)
         # cKDTree returns shape (1, k) when k>1, or scalars when k==1
         if k == 1:
-            return SearchResult(
-                indices=np.array([int(idx)]), distances=np.array([float(dist)])
-            )
+            return SearchResult(indices=np.array([int(idx)]), distances=np.array([float(dist)]))
         return SearchResult(indices=idx[0].astype(int), distances=dist[0].astype(float))
 
     def save(self, path: str) -> None:

@@ -6,9 +6,9 @@ from pathlib import Path
 
 # TOML loader (py3.11+: tomllib; py3.10 fallback to tomli if installed)
 try:
-    import tomllib  # type: ignore[attr-defined]
+    import tomllib
 except ModuleNotFoundError:  # py310 fallback
-    import tomli as tomllib  # type: ignore[no-redef]
+    import tomli as tomllib
 
 DEFAULT_SEARCH_PATHS = [
     Path("./mosaic.toml"),

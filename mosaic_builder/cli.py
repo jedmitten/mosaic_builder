@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 import typer
 
@@ -8,6 +10,7 @@ from mosaic_builder.config import AppConfig, load_config
 from mosaic_builder.index.build_index import build_kdtree
 from mosaic_builder.pipeline.build_mosaic import build_mosaic
 from mosaic_builder.pipeline.ingest import ingest_dir
+from mosaic_builder.stores.factory import open_store
 
 app = typer.Typer(add_completion=False)
 
@@ -70,9 +73,67 @@ def build(
     debug_dir: Path | None = typer.Option(None, help="Save debug images here"),
 ):
     cfg = _resolve_cfg(config, None, store, index_path, tile_px)
-    build_mosaic(
-        cfg.store_url, cfg.index_path, target, out, cfg.tile_px, cfg.tile_px, debug_dir
-    )
+    build_mosaic(cfg.store_url, cfg.index_path, target, out, cfg.tile_px, cfg.tile_px, debug_dir)
+
+
+@app.command()
+def reset_db(
+    store: str = typer.Option(
+        "sqlite:///mosaic.db",
+        help='DB URL, e.g. "sqlite:///mosaic.db" or "duckdb:///mosaic.duckdb"',
+    ),
+    mode: str = typer.Option(
+        "wipe",
+        help='"wipe" = delete rows; keep schema. "drop" = drop & recreate schema.',
+    ),
+    nuke: bool = typer.Option(False, help="Delete the database file itself (dangerous)."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+):
+    """
+    Reset the database so you can start over.
+    """
+    # Parse path for possible --nuke
+    parsed = urlparse(store)
+    db_path = (parsed.path or "").lstrip("/")
+
+    if not yes:
+        msg = "This will "
+        if nuke:
+            msg += f"DELETE the DB file at '{db_path}'."
+        elif mode == "drop":
+            msg += "DROP and recreate all tables."
+        else:
+            msg += "DELETE all rows (keeping schema)."
+        typer.confirm(f"{msg} Continue?", abort=True)
+
+    if nuke:
+        # Close any open handle by opening/closing once
+        s = open_store(store)
+        try:
+            s.close()
+        finally:
+            pass
+        if db_path:
+            try:
+                os.remove(db_path)
+                typer.echo(f"[mosaic-builder] Deleted DB file: {db_path}")
+            except FileNotFoundError:
+                typer.echo(f"[mosaic-builder] DB file not found: {db_path}")
+        return
+
+    s = open_store(store)
+    try:
+        if mode == "wipe":
+            s.wipe_all()
+            typer.echo("[mosaic-builder] Database wiped (rows deleted, schema kept).")
+        elif mode == "drop":
+            s.drop_all()
+            s.ensure_schema()
+            typer.echo("[mosaic-builder] Database dropped and recreated.")
+        else:
+            raise typer.BadParameter('mode must be "wipe" or "drop"')
+    finally:
+        s.close()
 
 
 if __name__ == "__main__":
