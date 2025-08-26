@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable, Tuple
 
 import numpy as np
 
@@ -17,53 +16,72 @@ class SqlTileStore:
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS photos (
-                  id INTEGER PRIMARY KEY,
-                  path TEXT UNIQUE NOT NULL,
-                  width INT NOT NULL,
-                  height INT NOT NULL
+                id INTEGER PRIMARY KEY,
+                path TEXT UNIQUE NOT NULL,
+                width INT NOT NULL,
+                height INT NOT NULL
+                );
+            """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS grids (
+                id INTEGER PRIMARY KEY,
+                photo_id INT NOT NULL,
+                tile_w INT NOT NULL,
+                tile_h INT NOT NULL,
+                cols INT NOT NULL,
+                rows INT NOT NULL,
+                UNIQUE(photo_id, tile_w, tile_h)
                 );
             """
             )
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS tiles (
-                  id INTEGER PRIMARY KEY,
-                  photo_id INT NOT NULL,
-                  x INT NOT NULL,
-                  y INT NOT NULL,
-                  tile_w INT NOT NULL,
-                  tile_h INT NOT NULL,
-                  l REAL NOT NULL,
-                  a REAL NOT NULL,
-                  b REAL NOT NULL
+                id INTEGER PRIMARY KEY,
+                grid_id INT NOT NULL,
+                x INT NOT NULL,
+                y INT NOT NULL,
+                l REAL NOT NULL, a REAL NOT NULL, b REAL NOT NULL
                 );
             """
             )
         else:  # duckdb
             cur.execute("CREATE SEQUENCE IF NOT EXISTS photos_id_seq START 1;")
+            cur.execute("CREATE SEQUENCE IF NOT EXISTS grids_id_seq START 1;")
             cur.execute("CREATE SEQUENCE IF NOT EXISTS tiles_id_seq START 1;")
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS photos (
-                  id BIGINT PRIMARY KEY DEFAULT nextval('photos_id_seq'),
-                  path TEXT UNIQUE NOT NULL,
-                  width INTEGER NOT NULL,
-                  height INTEGER NOT NULL
+                id BIGINT PRIMARY KEY DEFAULT nextval('photos_id_seq'),
+                path TEXT UNIQUE NOT NULL,
+                width INTEGER NOT NULL,
+                height INTEGER NOT NULL
+                );
+            """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS grids (
+                id BIGINT PRIMARY KEY DEFAULT nextval('grids_id_seq'),
+                photo_id BIGINT NOT NULL,
+                tile_w INTEGER NOT NULL,
+                tile_h INTEGER NOT NULL,
+                cols INTEGER NOT NULL,
+                rows INTEGER NOT NULL,
+                UNIQUE(photo_id, tile_w, tile_h)
                 );
             """
             )
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS tiles (
-                  id BIGINT PRIMARY KEY DEFAULT nextval('tiles_id_seq'),
-                  photo_id BIGINT NOT NULL,
-                  x INTEGER NOT NULL,
-                  y INTEGER NOT NULL,
-                  tile_w INTEGER NOT NULL,
-                  tile_h INTEGER NOT NULL,
-                  l DOUBLE NOT NULL,
-                  a DOUBLE NOT NULL,
-                  b DOUBLE NOT NULL
+                id BIGINT PRIMARY KEY DEFAULT nextval('tiles_id_seq'),
+                grid_id BIGINT NOT NULL,
+                x INTEGER NOT NULL,
+                y INTEGER NOT NULL,
+                l DOUBLE NOT NULL, a DOUBLE NOT NULL, b DOUBLE NOT NULL
                 );
             """
             )
@@ -72,10 +90,9 @@ class SqlTileStore:
     # --- create INDEXES (safe to run after data is clean) ---
     def ensure_indexes(self) -> None:
         cur = self.conn.cursor()
-        # unique index for idempotency + lookup index
-        cur.execute("CREATE INDEX IF NOT EXISTS tiles_photo_id_idx ON tiles(photo_id);")
-        # Unique can fail if duplicates exist; caller should wipe/drop before calling.
-        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS tiles_photo_xy_unique ON tiles(photo_id, x, y);")
+        cur.execute("CREATE INDEX IF NOT EXISTS tiles_grid_id_idx ON tiles(grid_id);")
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS tiles_grid_xy_unique ON tiles(grid_id, x, y);")
+        cur.execute("CREATE INDEX IF NOT EXISTS grids_photo_idx ON grids(photo_id);")
         self.conn.commit()
 
     def wipe_all(self) -> None:
@@ -97,52 +114,75 @@ class SqlTileStore:
     def drop_all(self) -> None:
         """Drop tables (and sequences on DuckDB). Safe if they don't exist."""
         cur = self.conn.cursor()
+        # Drop child tables first
         cur.execute("DROP TABLE IF EXISTS tiles;")
+        cur.execute("DROP TABLE IF EXISTS grids;")
         cur.execute("DROP TABLE IF EXISTS photos;")
+
         if self.engine == "duckdb":
-            cur.execute("DROP SEQUENCE IF NOT EXISTS tiles_id_seq;")
-            cur.execute("DROP SEQUENCE IF NOT EXISTS photos_id_seq;")
+            # Use IF EXISTS (not IF NOT EXISTS). Guard with try in case very old versions.
+            for seq in ("tiles_id_seq", "grids_id_seq", "photos_id_seq"):
+                try:
+                    cur.execute(f"DROP SEQUENCE IF EXISTS {seq};")
+                except Exception:
+                    pass
+
         self.conn.commit()
 
     def upsert_photo(self, path: Path, width: int, height: int) -> int:
         cur = self.conn.cursor()
         if self.engine == "sqlite":
+            cur.execute("INSERT OR IGNORE INTO photos(path,width,height) VALUES (?,?,?)", (str(path), width, height))
+        else:
             cur.execute(
-                "INSERT OR IGNORE INTO photos(path,width,height) VALUES (?,?,?)",
-                (str(path), width, height),
-            )
-        else:  # duckdb
-            cur.execute(
-                "INSERT INTO photos(path,width,height) VALUES (?,?,?) " "ON CONFLICT (path) DO NOTHING",
+                "INSERT INTO photos(path,width,height) VALUES (?,?,?) ON CONFLICT (path) DO NOTHING",
                 (str(path), width, height),
             )
         cur.execute("SELECT id FROM photos WHERE path=?", (str(path),))
         return int(cur.fetchone()[0])
 
-    def insert_tiles(self, rows: Iterable[Tuple[int, int, int, int, int, float, float, float]]) -> None:
+    def upsert_grid(self, photo_id: int, tile_w: int, tile_h: int, cols: int, rows: int) -> int:
         cur = self.conn.cursor()
         if self.engine == "sqlite":
-            # ignore duplicates if (photo_id,x,y) already present
-            cur.executemany(
-                "INSERT OR IGNORE INTO tiles (photo_id,x,y,tile_w,tile_h,l,a,b) VALUES (?,?,?,?,?,?,?,?)",
-                rows,
+            cur.execute(
+                "INSERT OR IGNORE INTO grids(photo_id,tile_w,tile_h,cols,rows) VALUES (?,?,?,?,?)",
+                (photo_id, tile_w, tile_h, cols, rows),
             )
-        else:  # duckdb
-            # ON CONFLICT matches the unique index on (photo_id,x,y)
+        else:
+            cur.execute(
+                "INSERT INTO grids(photo_id,tile_w,tile_h,cols,rows) VALUES (?,?,?,?,?) "
+                "ON CONFLICT (photo_id, tile_w, tile_h) DO NOTHING",
+                (photo_id, tile_w, tile_h, cols, rows),
+            )
+        cur.execute("SELECT id FROM grids WHERE photo_id=? AND tile_w=? AND tile_h=?", (photo_id, tile_w, tile_h))
+        return int(cur.fetchone()[0])
+
+    def has_tiles_for_grid(self, grid_id: int) -> bool:
+        cur = self.conn.cursor()
+        cur.execute("SELECT 1 FROM tiles WHERE grid_id=? LIMIT 1", (grid_id,))
+        return cur.fetchone() is not None
+
+    def delete_tiles_for_grid(self, grid_id: int) -> None:
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM tiles WHERE grid_id=?", (grid_id,))
+        self.conn.commit()
+
+    def insert_tiles(self, grid_id: int, rows: list[tuple[int, int, float, float, float]]) -> None:
+        # rows: (x, y, L, A, B)
+        cur = self.conn.cursor()
+        if self.engine == "sqlite":
             cur.executemany(
-                "INSERT INTO tiles (photo_id,x,y,tile_w,tile_h,l,a,b) "
-                "VALUES (?,?,?,?,?,?,?,?) "
-                "ON CONFLICT (photo_id, x, y) DO NOTHING",
-                rows,
+                "INSERT OR IGNORE INTO tiles (grid_id,x,y,l,a,b) VALUES (?,?,?,?,?,?)",
+                [(grid_id, x, y, l, a, b) for (x, y, l, a, b) in rows],
+            )
+        else:
+            cur.executemany(
+                "INSERT INTO tiles (grid_id,x,y,l,a,b) VALUES (?,?,?,?,?,?) " "ON CONFLICT (grid_id, x, y) DO NOTHING",
+                [(grid_id, x, y, l, a, b) for (x, y, l, a, b) in rows],
             )
         self.conn.commit()
 
-    def has_tiles_for_photo(self, photo_id: int) -> bool:
-        cur = self.conn.cursor()
-        cur.execute("SELECT 1 FROM tiles WHERE photo_id=? LIMIT 1", (photo_id,))
-        return cur.fetchone() is not None
-
-    def all_tile_vectors(self) -> Tuple[list[int], np.ndarray]:
+    def all_tile_vectors(self) -> tuple[list[int], np.ndarray]:
         cur = self.conn.cursor()
         cur.execute("SELECT id, l, a, b FROM tiles")
         data = cur.fetchall()
@@ -150,14 +190,19 @@ class SqlTileStore:
         vecs = np.array([[r[1], r[2], r[3]] for r in data], dtype=np.float32)
         return ids, vecs
 
-    def tile_patch_info(self, tile_id: int):
+    def tile_patch_info(self, tile_id: int) -> tuple[str, int, int, int, int]:
+        """
+        Returns (photo_path, x, y, tile_w, tile_h) for a tile id.
+        """
         cur = self.conn.cursor()
         cur.execute(
             """
-            SELECT photos.path, tiles.x, tiles.y, tiles.tile_w, tiles.tile_h
-            FROM tiles JOIN photos ON tiles.photo_id = photos.id
-            WHERE tiles.id=?
-        """,
+            SELECT p.path, t.x, t.y, g.tile_w, g.tile_h
+            FROM tiles t
+            JOIN grids g ON t.grid_id = g.id
+            JOIN photos p ON g.photo_id = p.id
+            WHERE t.id=?
+            """,
             (tile_id,),
         )
         path, x, y, tw, th = cur.fetchone()

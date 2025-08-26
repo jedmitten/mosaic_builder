@@ -43,12 +43,13 @@ def ingest(
     config: Path | None = typer.Option(None, "--config", "-c"),
     store: str | None = typer.Option(None),
     tile_px: int | None = typer.Option(None),
-    debug_dir: Path | None = typer.Option(None, help="Save debug images here"),
+    debug_dir: Path | None = typer.Option(None),
+    reingest: bool = typer.Option(False, help="Recompute tiles for this grid size if it already exists."),
 ):
     cfg = _resolve_cfg(config, images_dir, store, None, tile_px)
     if cfg.photos_src is None:
         raise typer.BadParameter("photos_src not provided.")
-    ingest_dir(cfg.store_url, cfg.photos_src, cfg.tile_px, cfg.tile_px, debug_dir)
+    ingest_dir(cfg.store_url, cfg.photos_src, cfg.tile_px, cfg.tile_px, debug_dir, reingest=reingest)
 
 
 @app.command()

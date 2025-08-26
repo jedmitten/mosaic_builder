@@ -69,6 +69,8 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+# because I'm using Lab for images, which has single-letter variable names
+ignore = ["E741"]
 
 [tool.mypy]
 python_version = "3.10"
