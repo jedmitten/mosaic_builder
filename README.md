@@ -2,24 +2,26 @@
 
 A Python library for reading photos and building **photo mosaics**.
 
-- Ingests a folder of photos, slices them into **tiles**, stores average Lab color.
-- Supports multiple **tile sizes per photo** via a normalized `grids` table.
-- Offers pluggable nearest-neighbor backends (KD-Tree now; ANN later).
-- Storage backends: **SQLite** or **DuckDB** (choose at runtime).
+* Ingests a folder of photos, slices them into **tiles**, and stores their average Lab color.
+* Supports multiple **tile sizes per photo** via a normalized `grids` table.
+* Offers pluggable nearest-neighbor backends (KD-Tree now; ANN later).
+* Storage backends: **SQLite** or **DuckDB** (choose at runtime).
 
 ---
 
 ## Purpose
 
-- Provide a reusable, scriptable toolkit for **mosaic-style** art projects.
-- Make ingestion/indexing/querying reliable and resumable.
-- Keep storage and search **backend-agnostic** with clean interfaces.
+* Provide a reusable, scriptable toolkit for **mosaic-style art projects**.
+* Make ingestion/indexing/querying reliable and resumable.
+* Keep storage and search **backend-agnostic** with clean interfaces.
+
+---
 
 ## Not the Purpose
 
-- Not a GUI editor or general photo manager.
-- Not optimized (yet) for multi-billion-tile, distributed compute.
-- Not a general image processing framework.
+* Not a GUI editor or general photo manager.
+* Not optimized (yet) for multi-billion-tile, distributed compute.
+* Not a general image processing framework.
 
 ---
 
@@ -29,13 +31,13 @@ A Python library for reading photos and building **photo mosaics**.
 git clone https://github.com/jedmitten/mosaic_builder.git
 cd mosaic_builder
 
-# core (numpy, pillow, scipy, typer)
+# core dependencies (numpy, pillow, scipy, typer, etc.)
 uv sync
 
 # optional extras
 uv sync --extra analytics   # duckdb + pandas
 uv sync --extra debug       # matplotlib debug visuals
-````
+```
 
 ---
 
@@ -44,56 +46,68 @@ uv sync --extra debug       # matplotlib debug visuals
 ### Ingest photos → tiles (per grid size)
 
 ```bash
-# Create (or re-use) a DB and ingest all images in ./gallery at 24×24 tiles
-mosaic-builder ingest --images-dir ./gallery --store duckdb:///mosaic.duckdb --tile-px 24 --debug-dir ./debug
-
-# Re-ingest the same photo set at 32×32 tiles; coexists with 24×24
-mosaic-builder ingest --images-dir ./gallery --store duckdb:///mosaic.duckdb --tile-px 32 --debug-dir ./debug
+# Ingest all images in ./gallery at 24×24 tiles
+mosaic-builder ingest --images-dir ./gallery \
+  --store duckdb:///mosaic.duckdb \
+  --tile-px 24 \
+  --debug-dir ./debug
 ```
 
-Resuming behaviors:
+Re-ingest at a different size (coexists as a separate grid):
 
-* If a **grid** (photo + tile size) already has tiles, ingest **skips** it.
-* Force refresh for a grid size with:
+```bash
+mosaic-builder ingest --images-dir ./gallery \
+  --store duckdb:///mosaic.duckdb \
+  --tile-px 102 \
+  --debug-dir ./debug
+```
 
-  ```bash
-  mosaic-builder ingest --images-dir ./gallery --store duckdb:///mosaic.duckdb --tile-px 32 --reingest
-  ```
+* Each `(photo, tile size)` combination is a **grid**.
+* Existing grids are skipped automatically.
+* Force refresh for a grid size with `--reingest`.
+
+---
 
 ### Build an index of tiles (KD-Tree)
 
 ```bash
-mosaic-builder build-index --store duckdb:///mosaic.duckdb --index tiles_kdtree.pkl --debug-dir ./debug
+mosaic-builder index \
+  --store duckdb:///mosaic.duckdb \
+  --index-path tiles_kdtree.pkl \
+  --debug-dir ./debug
 ```
 
-*(Future)*: `--tile-size <N>` to index only tiles from a given grid size.
+---
 
 ### Build a mosaic from a target image
 
 ```bash
-mosaic-builder build-mosaic --target ./target.jpg \
+mosaic-builder mosaic \
+  --target ./target.jpg \
   --store duckdb:///mosaic.duckdb \
-  --index tiles_kdtree.pkl \
+  --index-path tiles_kdtree.pkl \
   --out mosaic.png \
   --debug-dir ./debug
 ```
 
-### Reset the database (useful during development)
+---
+
+### Reset the database
 
 ```bash
-# Delete rows (keep schema and indexes)
+# Delete rows (keep schema + indexes)
 mosaic-builder reset-db --store duckdb:///mosaic.duckdb --mode wipe -y
 
 # Drop tables/sequences and recreate schema + indexes
 mosaic-builder reset-db --store duckdb:///mosaic.duckdb --mode drop -y
 
-# Nuke the DB file itself (dangerous)
+# Delete the DB file itself (dangerous)
 mosaic-builder reset-db --store duckdb:///mosaic.duckdb --nuke -y
 ```
 
 ---
 
-## Python API (snippet)
+## Python API Example
 
 ```python
 from pathlib import Path
@@ -102,7 +116,7 @@ from mosaic_builder.stores.factory import open_store
 
 store_url = "duckdb:///mosaic.duckdb"
 
-# Ingest a folder at 24px tiles; creates per-photo grids and tiles
+# Ingest a folder at 24px tiles
 ingest_dir(store_url, Path("gallery"), tile_w=24, tile_h=24, debug_dir=Path("debug"))
 
 # Access vectors for indexing
@@ -113,13 +127,13 @@ store.close()
 
 ---
 
-## Project Structure (storage model)
+## Project Schema
 
 * **photos**: `id`, `path (UNIQUE)`, `width`, `height`
 * **grids**: `id`, `photo_id`, `tile_w`, `tile_h`, `cols`, `rows`, `UNIQUE(photo_id, tile_w, tile_h)`
 * **tiles**: `id`, `grid_id`, `x`, `y`, `l`, `a`, `b`, `UNIQUE(grid_id, x, y)`
 
-This lets the same photo have multiple tilings (24×24, 32×32, …) without conflicts.
+This design allows the same photo to have multiple tilings (24×24, 102×102, etc.) without conflicts.
 
 ---
 
@@ -131,12 +145,13 @@ This lets the same photo have multiple tilings (24×24, 32×32, …) without con
   pre-commit install
   pre-commit run --all-files
   ```
-* Tests:
+* Run tests:
 
   ```bash
   uv run pytest -q
   ```
-* Open issues/PRs with a concise description and reproduction steps. For larger features, please start with an issue to align on approach.
+* Open issues/PRs with a concise description and reproduction steps.
+* For larger features, please start with an issue to align on approach.
 
 ---
 
