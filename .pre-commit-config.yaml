@@ -1,0 +1,65 @@
+ci:
+  # Optional: enable if you use pre-commit.ci to auto-PR hook bumps
+  autoupdate_schedule: monthly
+
+repos:
+  # --- Hygiene ---
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-added-large-files
+        # keep huge photos out of the repo accidentally
+        args: [--maxkb=5000]  # 5 MB
+        exclude: ^gallery/        # allow your photo source dir if it’s committed
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: debug-statements
+
+  # --- Ruff (lint + autofix, incl import sorting if you want) ---
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args:
+          - --fix
+          - --exit-non-zero-on-fix  # fail if changes were required (helps CI)
+        # Only lint code, not images or generated artifacts
+        exclude: |
+          (?x)^(
+            gallery/|
+            .*\.ipynb_checkpoints/|
+            .*\.egg-info/|
+            build/|dist/
+          )
+        types_or: [python]
+
+  # --- Black (final formatter) ---
+  - repo: https://github.com/psf/black
+    rev: 24.10.0
+    hooks:
+      - id: black
+        language_version: python3
+        exclude: |
+          (?x)^(
+            gallery/|
+            build/|dist/
+          )
+
+  # --- Mypy (type checking) ---
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.11.1
+    hooks:
+      - id: mypy
+        # Limit to your package + tests so mypy doesn't crawl vendor dirs
+        files: ^(mosaic_builder/|tests/)
+        additional_dependencies:
+          - types-Pillow
+          - types-setuptools
+          # add stubs as needed
