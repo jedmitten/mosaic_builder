@@ -4,11 +4,28 @@ from pathlib import Path
 
 import numpy as np
 
+from mosaic_builder.stores.base import BaseTileStore
 
-class SqlTileStore:
-    def __init__(self, conn, engine: str):
-        self.conn = conn
+
+class SqlTileStore(BaseTileStore):
+    def __init__(self, engine: str):
+        self.conn = None
         self.engine = engine  # "sqlite" | "duckdb"
+
+    def initialize(self, **kwargs) -> None:
+        """Initialize the database connection."""
+        if self.engine == "sqlite":
+            import sqlite3
+
+            self.conn = sqlite3.connect(kwargs.get("path", "mosaic.db"))
+            self.conn.execute("PRAGMA journal_mode=WAL;")
+            self.conn.execute("PRAGMA synchronous=NORMAL;")
+        elif self.engine == "duckdb":
+            import duckdb
+
+            self.conn = duckdb.connect(str(kwargs.get("path", "mosaic.duckdb")))
+        else:
+            raise ValueError(f"Unsupported engine: {self.engine}")
 
     def ensure_schema(self) -> None:
         cur = self.conn.cursor()

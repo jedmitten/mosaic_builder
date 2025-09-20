@@ -14,7 +14,7 @@ from rich.progress import (
 )
 from skimage.color import rgb2lab
 
-from mosaic_builder.stores.factory import open_store
+from mosaic_builder.stores.base import BaseTileStore
 
 
 def avg_lab_from_patch(pil_img):
@@ -24,14 +24,14 @@ def avg_lab_from_patch(pil_img):
 
 
 def ingest_dir(
-    store_url: str, images_dir: Path, tile_w=24, tile_h=24, debug_dir: Path | None = None, reingest: bool = False
+    store: BaseTileStore, images_dir: Path, tile_w=24, tile_h=24, debug_dir: Path | None = None, reingest: bool = False
 ):
+    """Ingest images from a directory into the tile store."""
     images = [p for p in sorted(images_dir.rglob("*")) if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}]
     if not images:
         print(f"No images found under {images_dir}")
         return
 
-    store = open_store(store_url)
     store.ensure_schema()
     if debug_dir:
         debug_dir.mkdir(parents=True, exist_ok=True)

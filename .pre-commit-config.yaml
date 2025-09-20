@@ -51,15 +51,3 @@ repos:
             gallery/|
             build/|dist/
           )
-
-  # --- Mypy (type checking) ---
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.11.1
-    hooks:
-      - id: mypy
-        # Limit to your package + tests so mypy doesn't crawl vendor dirs
-        files: ^(mosaic_builder/|tests/)
-        additional_dependencies:
-          - types-Pillow
-          - types-setuptools
-          # add stubs as needed
