@@ -6,6 +6,7 @@ from mosaic_builder.matcher import greedy_match
 from mosaic_builder.renderer import render_mosaic
 from mosaic_builder.tiler import make_tile
 from tests.utils import delta_e_mean, solid
+from tests.vis import side_by_side
 
 
 def test_render_visually_matches_reference_mean_color(
@@ -23,4 +24,7 @@ def test_render_visually_matches_reference_mean_color(
     ref = solid(24, 24, (255, 0, 0))
     matches = greedy_match(ref, idx, tile_side=12, grain=1.0)
     out = render_mosaic(matches, tiles, canvas_size=ref.size, tile_side=12)
+    # Visuals
+    panel = side_by_side([("ref", ref), ("out", out)])
+    save_artifact(panel, "renderer_ref_vs_out")
     assert delta_e_mean(ref, out) < 2.5

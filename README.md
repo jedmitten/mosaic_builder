@@ -1,61 +1,61 @@
 # mosaic-builder
 
-A Python library for reading photos and building **photo mosaics**.
-The library is designed to support creative/art projects where you want to take a collection of “source” photos (tiles) and reassemble them into a mosaic version of a “target” image.
+**mosaic-builder** is a Python toolkit for creating **photo mosaics**: reassembling a target image out of thousands of source tiles. It’s built for creative and artistic workflows where you want flexible control over how images are ingested, indexed, matched, and rendered.
 
 ---
 
-## Purpose
+## Goals
 
 * Provide a **reusable library** for tiling, indexing, and querying photos.
-* Make it easy to ingest large sets of source images into a database (SQLite/DuckDB).
-* Allow flexible nearest-neighbor search backends (KD-Tree, HNSW, Faiss).
-* Serve as the backbone for art projects (e.g. “Views from the Urinal”) that require organizing, analyzing, and recombining photos into mosaics.
-* Be **data-backend-agnostic**, with interfaces abstracting storage and search.
+* Support ingesting large photo collections into efficient local stores (DuckDB, SQLite).
+* Allow flexible nearest-neighbor backends (KD-Tree, HNSW, Faiss).
+* Act as the **engine** behind art projects (e.g. *Views from the Urinal*).
+* Stay **backend-agnostic** with clear interfaces between storage, indexing, and rendering.
 
 ---
 
-## What is *not* the purpose
+## Non-Goals
 
-* This is **not** a full GUI mosaic editor.
-* This is **not** a drop-in replacement for photo cataloging tools (e.g., Lightroom).
-* This is **not** optimized yet for distributed, billion-tile datasets (though the API leaves room for scaling).
-* It is **not** a general-purpose image processing library — it focuses narrowly on mosaic workflows.
+* Not a full GUI mosaic editor.
+* Not a replacement for photo cataloging software (e.g. Lightroom).
+* Not yet optimized for billion-tile distributed datasets (though the design leaves room).
+* Not a general-purpose image processing toolkit — the focus is narrowly on mosaics.
 
 ---
 
-## How to Use
-
-### Install
+## Installation
 
 ```bash
-# clone repo and install dev version
 git clone https://github.com/jedmitten/mosaic_builder.git
 cd mosaic_builder
-uv sync  # or: pip install -e .
+uv sync   # or: pip install -e .
 ```
 
 Optional extras:
 
 ```bash
-uv sync --extra analytics  # enable DuckDB + Pandas
-uv sync --extra debug      # enable matplotlib debug visuals
+uv sync --extra analytics   # DuckDB + Pandas support
+uv sync --extra debug       # matplotlib debug visuals
 ```
 
-### CLI
+---
+
+## Command-Line Usage
 
 ```bash
-# ingest source photos into a DuckDB-backed store
+# Ingest source photos into a DuckDB store
 mosaic-builder ingest --images-dir gallery --store duckdb:///mosaic.duckdb
 
-# build a KDTree index of tiles
+# Build a KD-Tree index of tiles
 mosaic-builder build-index --store duckdb:///mosaic.duckdb --index tiles_kdtree.pkl
 
-# generate a mosaic from a target image
+# Generate a mosaic from a target image
 mosaic-builder build-mosaic --target urinal.jpg --index tiles_kdtree.pkl --out mosaic.png
 ```
 
-### Python API
+---
+
+## Python API
 
 ```python
 from mosaic_builder.pipeline import ingest_dir
@@ -67,18 +67,37 @@ ingest_dir("duckdb:///mosaic.duckdb", "gallery", tile_w=24, tile_h=24)
 
 ---
 
-## How to Contribute
+## Matching & Grain
+
+Tile placement is handled by `greedy_match`. The `grain` parameter controls the **grid stride and offset**:
+
+* **Coarse (`grain >= 1.0`)**
+
+  * stride = `tile_side`
+  * offset = `tile_side // 2` (misaligned)
+  * Useful for stressing boundary conditions.
+
+* **Fine (`0 < grain < 1.0`)**
+
+  * stride = `int(tile_side * grain)`
+  * offset = 0 (aligned, denser grid)
+  * Provides sharper boundary fidelity, at the cost of overlapping placements.
+
+Renderer behavior is “last write wins” when placements overlap, which crisps up edges in typical mosaic use cases.
+
+---
+
+## Contributing
 
 Contributions are welcome!
 
-* Use [pre-commit](https://pre-commit.com) hooks (`ruff`, `black`, `mypy`, `pytest`) to keep code style consistent.
+* Use [pre-commit](https://pre-commit.com) hooks (`ruff`, `black`, `mypy`, `pytest`).
 * Run the test suite with `pytest`.
-* Open an issue or pull request with a clear description of the change.
-* For larger features, please discuss in an issue before coding to ensure alignment.
+* Open issues or PRs with a clear description.
+* For larger features, open an issue first to discuss direction.
 
 ---
 
 ## License
 
-This project is licensed under the terms of the **MIT License**.
-See the [LICENSE](LICENSE) file for full text.
+Licensed under the **MIT License**. See [LICENSE](LICENSE) for details.

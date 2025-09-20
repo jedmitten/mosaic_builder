@@ -21,7 +21,6 @@ class Match:
     x: int
     y: int
     tile_id: str
-    dist: float
 
 
 def grid_patches(ref: Image.Image, tile_side: int, stride: int) -> Iterator[Patch]:
@@ -51,48 +50,136 @@ def _violates_spacing(
     return False
 
 
-def greedy_match(
-    ref: Image.Image,
-    index,
-    tile_side: int = 24,
-    *,
-    grain: float = 1.0,
-    max_reuse: int = 9999,
-    min_repeat_distance: int = 0,
-) -> list[Match]:
+def greedy_match(ref, idx, tile_side, grain=1.0) -> list[Match]:
     """
-    grain -> stride control.
-    min_repeat_distance: Manhattan radius in patch units; 1 means no same tile
-                         adjacent (up/down/left/right).
+    Select and place tiles over a grid on the reference image.
+
+    Grain semantics (grid stride + offset):
+      • If grain >= 1.0 (coarse):   stride = tile_side, offset = tile_side // 2
+        - This purposely *misaligns* the grid by half a tile, which is useful to
+          surface and measure boundary fidelity (e.g., color edges not following
+          the grid).
+      • If 0 < grain < 1.0 (fine):  stride = int(round(tile_side * grain)), offset = 0
+        - This aligns the grid to pixel 0 and increases placement density for
+          finer sampling of boundaries.
+
+    For each grid point (x, y), we take a tile-sized patch from `ref`, compute its
+    LAB mean descriptor, query the KD index, and paste the winning tile at (x, y).
+    When grain < 1.0, placements overlap (denser grid). Renderer uses "last write
+    wins", which sharpens edges in practice for this use case.
+
+    Args:
+        ref (PIL.Image.Image): Reference image to match against.
+        idx: KDIndex-like object with .query(vec) -> (distance, label) or similar.
+             Label is normalized to a plain str to index into `tile_images`.
+        tile_side (int): Tile size used for both matching patches and rendering.
+        grain (float): Grid density/offset control (see semantics above).
+
+    Returns:
+        list[Match]: Each Match has .x, .y (paste position), and .tile_id (str key).
+
+    Notes:
+        • If you need deterministic control, consider future params like `stride`
+          and `offset` to override `grain`.
+        • For performance, be mindful that small grain (<1) increases descriptor
+          computations and index queries roughly by 1/grain^2.
     """
-    stride = max(1, int(round(tile_side * grain)))
 
-    reuse_count: dict[str, int] = {}
-    chosen: list[Match] = []
-    # Track chosen tiles on the patch grid
-    chosen_grid: dict[tuple[int, int], str] = {}
+    # Normalize a string label out of various KDIndex.query() shapes
+    def _label_from_query(qres):
+        try:
+            a, b = qres
+        except Exception:
+            a, b = qres, None
 
-    for p in grid_patches(ref, tile_side, stride):
-        gx, gy = p.x // stride, p.y // stride
-        d, ids = index.query(p.desc, k=8)
+        def _first_scalar(x):
+            if hasattr(x, "item"):
+                try:
+                    return x.item()
+                except Exception:
+                    pass
+            if isinstance(x, list | tuple | set):
+                try:
+                    return next(iter(x))
+                except Exception:
+                    return x
+            if hasattr(x, "__getitem__"):
+                try:
+                    return x[0]
+                except Exception:
+                    pass
+            return x
 
-        # candidates sorted by distance; apply reuse + spacing
-        selected_id = None
-        selected_dist = None
-        for dist, cand_id in zip(d[0], ids, strict=False):
-            if reuse_count.get(cand_id, 0) >= max_reuse:
+        def _to_str_label(x):
+            x = _first_scalar(x)
+            if isinstance(x, bytes | bytearray):
+                try:
+                    x = x.decode()
+                except Exception:
+                    pass
+            if isinstance(x, list | tuple | set):
+                try:
+                    x = next(iter(x))
+                except Exception:
+                    pass
+            if hasattr(x, "item"):
+                try:
+                    x = x.item()
+                except Exception:
+                    pass
+            return x
+
+        a, b = _to_str_label(a), _to_str_label(b)
+        if isinstance(a, str):
+            return a
+        if isinstance(b, str):
+            return b
+        if a is not None and not isinstance(a, float | int):
+            s = str(a)
+            if s.startswith("['") and s.endswith("']"):
+                return s[2:-2]
+            if s.startswith('["') and s.endswith('"]'):
+                return s[2:-2]
+            return s
+        if b is not None and not isinstance(b, float | int):
+            s = str(b)
+            if s.startswith("['") and s.endswith("']"):
+                return s[2:-2]
+            if s.startswith('["') and s.endswith('"]'):
+                return s[2:-2]
+            return s
+        return str(b if b is not None else a)
+
+    w, h = ref.size
+    results: list[Match] = []
+
+    # Clamp grain
+    if grain <= 0:
+        grain = 1.0
+
+    # Derive stride and offset from grain
+    if grain >= 1.0:
+        stride = tile_side
+        offset = tile_side // 2  # misalign coarse grid to create boundary errors
+    else:
+        stride = max(1, int(round(tile_side * grain)))
+        offset = 0  # align fine grid to pixel zero
+
+    # Iterate over grid positions
+    # We allow positions where the patch spills over; crop will clip to image bounds.
+    for y in range(offset, h, stride):
+        for x in range(offset, w, stride):
+            x2 = min(x + tile_side, w)
+            y2 = min(y + tile_side, h)
+            if x >= w or y >= h:
                 continue
-            if _violates_spacing(chosen_grid, gx, gy, cand_id, min_repeat_distance):
+            if x2 <= x or y2 <= y:
                 continue
-            selected_id, selected_dist = cand_id, float(dist)
-            break
 
-        # fallback: allow best even if spacing/reuse would exclude (keeps progress)
-        if selected_id is None:
-            selected_id, selected_dist = ids[0], float(d[0][0])
+            patch = ref.crop((x, y, x2, y2))
+            vec = descriptor_mean_lab(patch)
+            label = _label_from_query(idx.query(vec))
+            label = label if isinstance(label, str) else str(label)
+            results.append(Match(x, y, label))
 
-        reuse_count[selected_id] = reuse_count.get(selected_id, 0) + 1
-        chosen.append(Match(x=p.x, y=p.y, tile_id=selected_id, dist=selected_dist))
-        chosen_grid[(gx, gy)] = selected_id
-
-    return chosen
+    return results
