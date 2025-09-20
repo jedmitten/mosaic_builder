@@ -12,12 +12,20 @@ def quick(
     out: str,
     tile_side: int = 24,
     grain: float = 1.0,
+    min_repeat_distance: int = 0,
 ):
     """
-    Build a mosaic.
-    grain: 1.0 = coarse (no overlap), 0.5 = finer (overlap), >1.0 = skip (coarser)
+    grain: 1.0 = coarse, 0.5 = finer (overlap), >1.0 = skip
+    min_repeat_distance: 0 = allow repeats anywhere; 1 = no adjacent repeats; 2+ increases spacing.
     """
-    pipeline.quick(ref, tiles, out, tile_side=tile_side, grain=grain)
+    pipeline.quick(
+        ref,
+        tiles,
+        out,
+        tile_side=tile_side,
+        grain=grain,
+        min_repeat_distance=min_repeat_distance,
+    )
 
 
 if __name__ == "__main__":

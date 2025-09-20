@@ -8,7 +8,9 @@ from mosaic_builder.tiler import make_tile
 from tests.utils import delta_e_mean, solid
 
 
-def test_render_visually_matches_reference_mean_color():
+def test_render_visually_matches_reference_mean_color(
+    save_artifact,
+):
     tiles = OrderedDict()
     tiles["red"] = make_tile(solid(16, 16, (255, 0, 0)), side=12)
     tiles["blue"] = make_tile(solid(16, 16, (0, 0, 255)), side=12)
@@ -19,6 +21,6 @@ def test_render_visually_matches_reference_mean_color():
     idx.build()
 
     ref = solid(24, 24, (255, 0, 0))
-    matches = greedy_match(ref, idx, tile_side=12, stride=12)
+    matches = greedy_match(ref, idx, tile_side=12, grain=1.0)
     out = render_mosaic(matches, tiles, canvas_size=ref.size, tile_side=12)
     assert delta_e_mean(ref, out) < 2.5

@@ -35,6 +35,22 @@ def grid_patches(ref: Image.Image, tile_side: int, stride: int) -> Iterator[Patc
             yield Patch(x=x, y=y, img=tile, desc=desc)
 
 
+def _violates_spacing(
+    grid: dict[tuple[int, int], str], gx: int, gy: int, tile_id: str, min_d: int
+) -> bool:
+    """Check Manhattan neighborhood within min_d for same tile_id."""
+    if min_d <= 0:
+        return False
+    for dy in range(-min_d, min_d + 1):
+        rem = min_d - abs(dy)
+        for dx in range(-rem, rem + 1):
+            if dx == 0 and dy == 0:
+                continue
+            if grid.get((gx + dx, gy + dy)) == tile_id:
+                return True
+    return False
+
+
 def greedy_match(
     ref: Image.Image,
     index,
@@ -45,23 +61,38 @@ def greedy_match(
     min_repeat_distance: int = 0,
 ) -> list[Match]:
     """
-    grain: user-friendly sampling control (maps to stride)
-      - 1.0 -> stride == tile_side (coarse; current default)
-      - 0.5 -> stride == tile_side//2 (overlap; finer)
-      - >1.0 -> stride > tile_side (skips; more impressionistic)
+    grain -> stride control.
+    min_repeat_distance: Manhattan radius in patch units; 1 means no same tile
+                         adjacent (up/down/left/right).
     """
     stride = max(1, int(round(tile_side * grain)))
 
     reuse_count: dict[str, int] = {}
     chosen: list[Match] = []
+    # Track chosen tiles on the patch grid
+    chosen_grid: dict[tuple[int, int], str] = {}
+
     for p in grid_patches(ref, tile_side, stride):
-        d, ids = index.query(p.desc, k=5)
-        cand = [
-            (dist, id_)
-            for dist, id_ in zip(d[0], ids, strict=False)
-            if reuse_count.get(id_, 0) < max_reuse
-        ]
-        dist, id_ = cand[0] if cand else (d[0][0], ids[0])
-        reuse_count[id_] = reuse_count.get(id_, 0) + 1
-        chosen.append(Match(x=p.x, y=p.y, tile_id=id_, dist=float(dist)))
+        gx, gy = p.x // stride, p.y // stride
+        d, ids = index.query(p.desc, k=8)
+
+        # candidates sorted by distance; apply reuse + spacing
+        selected_id = None
+        selected_dist = None
+        for dist, cand_id in zip(d[0], ids, strict=False):
+            if reuse_count.get(cand_id, 0) >= max_reuse:
+                continue
+            if _violates_spacing(chosen_grid, gx, gy, cand_id, min_repeat_distance):
+                continue
+            selected_id, selected_dist = cand_id, float(dist)
+            break
+
+        # fallback: allow best even if spacing/reuse would exclude (keeps progress)
+        if selected_id is None:
+            selected_id, selected_dist = ids[0], float(d[0][0])
+
+        reuse_count[selected_id] = reuse_count.get(selected_id, 0) + 1
+        chosen.append(Match(x=p.x, y=p.y, tile_id=selected_id, dist=selected_dist))
+        chosen_grid[(gx, gy)] = selected_id
+
     return chosen

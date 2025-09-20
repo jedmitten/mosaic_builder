@@ -21,6 +21,6 @@ def test_greedy_prefers_color_distance():
     tiles["blue"] = make_tile(solid(20, 20, (0, 0, 255)), side=12)
     idx = _index_from_tiles(tiles)
     ref = solid(24, 24, (255, 0, 0))
-    matches = greedy_match(ref, idx, tile_side=12, stride=12, max_reuse=99)
+    matches = greedy_match(ref, idx, tile_side=12, grain=1.0, max_reuse=99)
     chosen = {m.tile_id for m in matches}
     assert chosen == {"red"}

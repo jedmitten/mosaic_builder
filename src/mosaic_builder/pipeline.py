@@ -16,6 +16,7 @@ def quick(
     tile_side: int = 24,
     *,
     grain: float = 1.0,
+    min_repeat_distance: int = 0,
 ):
     ref = Image.open(ref_path)
     tiles = {}
@@ -30,7 +31,14 @@ def quick(
     for k, im in tiles.items():
         idx.add(k, descriptor_mean_lab(im))
     idx.build()
-    matches = greedy_match(ref, idx, tile_side=tile_side, grain=grain)
+    matches = greedy_match(
+        ref,
+        idx,
+        tile_side=tile_side,
+        grain=grain,
+        max_reuse=9999,
+        min_repeat_distance=min_repeat_distance,
+    )
     out = render_mosaic(matches, tiles, ref.size, tile_side)
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     out.save(out_path)
