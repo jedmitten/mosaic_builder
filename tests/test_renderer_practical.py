@@ -1,0 +1,24 @@
+from collections import OrderedDict
+
+from mosaic_builder.features import descriptor_mean_lab
+from mosaic_builder.indexer import KDIndex
+from mosaic_builder.matcher import greedy_match
+from mosaic_builder.renderer import render_mosaic
+from mosaic_builder.tiler import make_tile
+from tests.utils import delta_e_mean, solid
+
+
+def test_render_visually_matches_reference_mean_color():
+    tiles = OrderedDict()
+    tiles["red"] = make_tile(solid(16, 16, (255, 0, 0)), side=12)
+    tiles["blue"] = make_tile(solid(16, 16, (0, 0, 255)), side=12)
+
+    idx = KDIndex(3)
+    for k, im in tiles.items():
+        idx.add(k, descriptor_mean_lab(im))
+    idx.build()
+
+    ref = solid(24, 24, (255, 0, 0))
+    matches = greedy_match(ref, idx, tile_side=12, stride=12)
+    out = render_mosaic(matches, tiles, canvas_size=ref.size, tile_side=12)
+    assert delta_e_mean(ref, out) < 2.5
