@@ -1,69 +1,16 @@
 [project]
 name = "mosaic-builder"
-version = "0.2.0"
-description = "CLI to build photo mosaics from tile images"
+version = "0.0.1"
+description = "A toolkit to build mosaic images from a gallery"
 readme = "README.md"
 requires-python = ">=3.10"
-# runtime deps kept lean & fast
 dependencies = [
-  "pillow",
-  "numpy",
-  "scipy",
-  "scikit-image",
-  "typer[all]",
-  "tqdm",
-  "rich",
+  "duckdb",
 ]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 
-[project.scripts]
-mosaic-builder = "mosaic_builder.cli:app"
-
 [tool.uv]
 package = true
-[dependency-groups]
-dev = [
-  "pytest",
-  "pytest-cov",
-  "ruff",
-  "mypy",
-  "pre-commit",
-  "pytest-sugar>=1.1.1",
-  "pytest-html>=4.1.1",
-]
-
-# Keep ANN libs isolated so they aren't installed by default
-ann = [
-  "annoy",
-  "faiss-cpu",
-]
-
-# --- Tooling configs ---
-[tool.pytest.ini_options]
-addopts = "-q"
-testpaths = ["tests"]
-norecursedirs = [
-  "gallery",
-  "debug",
-  ".*",
-  "__pycache__",
-]
-
-[tool.ruff]
-line-length = 100
-target-version = "py311"
-
-[tool.ruff.lint]
-select = ["E","F","I","UP","B"]
-ignore = []
-
-[tool.mypy]
-python_version = "3.11"
-warn_unused_ignores = true
-warn_redundant_casts = true
-disallow_untyped_defs = true
-no_implicit_optional = true
-strict_optional = true
