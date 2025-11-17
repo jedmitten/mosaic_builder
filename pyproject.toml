@@ -5,6 +5,8 @@ description = "A toolkit to build mosaic images from a gallery"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+  "numpy",
+  "pillow",
   "duckdb",
 ]
 [build-system]
@@ -14,3 +16,8 @@ build-backend = "hatchling.build"
 
 [tool.uv]
 package = true
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.4.0",
+]

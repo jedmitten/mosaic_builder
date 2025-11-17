@@ -1,6 +1,4 @@
-# Project Context (Rebuild Primer)
-
-This file captures the intent and validated assumptions from the earlier mosaic-builder spike so we can safely delete the old codebase and rebuild with purpose.
+# Project Context
 
 ## Vision
 
@@ -30,11 +28,11 @@ This file captures the intent and validated assumptions from the earlier mosaic-
 
 ## Next Build Steps
 
-1. Scaffold a minimal uv-managed package (pyproject, src package, tests).
-2. Reintroduce a DuckDB-focused ingestion module that:
+1. Expand the package skeleton with ingestion, indexing, and rendering modules.
+2. Implement a DuckDB-focused ingestion module that:
    - Enumerates gallery photos, stores metadata + character tiles.
    - Persists tile descriptors (LAB + future embeddings) directly into DuckDB tables.
 3. Add a validation CLI (revive `validate_tiles`) that queries DuckDB instead of walking raw files.
 4. Layer on matching/rendering once ingestion fidelity is satisfactory.
 
-Keep this file up to date as the rebuild evolves so future resets remain painless.
+Keep this file up to date as the project evolves.
