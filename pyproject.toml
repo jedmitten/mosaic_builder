@@ -9,6 +9,9 @@ dependencies = [
   "pillow",
   "duckdb",
 ]
+[project.scripts]
+mosaic-builder = "mosaic_builder.__main__:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
