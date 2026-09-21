@@ -2,9 +2,14 @@ import tempfile
 from pathlib import Path
 from unittest import TestCase
 
-import duckdb
 from PIL import Image
 
+from mosaic_builder.duckdb_store import (
+    ensure_schema,
+    get_all_images,
+    get_tiles_for_image,
+    open_database,
+)
 from mosaic_builder.ingest import ingest_gallery
 from mosaic_builder.preview import render_preview
 
@@ -22,25 +27,52 @@ class IngestPreviewTest(TestCase):
             (_solid(140, 200, (30, 200, 30))).save(images_dir / "green.png")
 
             db_path = Path(tmp) / "tiles.duckdb"
-            previews = ingest_gallery(images_dir, db_path, tile_side=32, show_progress=False)
+            tile_side = 32
 
-            self.assertEqual(len(previews), 2)
-            self.assertTrue(all(preview.original_data_url.startswith("data:image/png") for preview in previews))
+            # Ingest returns a summary, not previews
+            summary = ingest_gallery(images_dir, db_path, tile_side=tile_side, show_progress=False)
+            self.assertEqual(summary.images, 2)
+            self.assertGreaterEqual(summary.tiles, 2)
 
-            conn = duckdb.connect(str(db_path))
+            # Verify DB state
+            conn = open_database(db_path)
+            ensure_schema(conn)
             try:
-                num_images = conn.execute("SELECT COUNT(*) FROM images").fetchone()[0]
-                self.assertEqual(num_images, 2)
-                num_tiles = conn.execute("SELECT COUNT(*) FROM tiles").fetchone()[0]
-                self.assertGreaterEqual(num_tiles, 2)
-                tile_blob = conn.execute("SELECT tile_png FROM tiles LIMIT 1").fetchone()[0]
-                self.assertIsInstance(tile_blob, (bytes, bytearray))
-                self.assertGreater(len(tile_blob), 0)
+                images = get_all_images(conn)
+                self.assertEqual(len(images), 2)
+                for img in images:
+                    tiles = get_tiles_for_image(conn, img["image_id"])
+                    self.assertGreater(len(tiles), 0)
+                    for tile in tiles:
+                        self.assertEqual(tile["tile_side"], tile_side)
+                        self.assertIsInstance(tile["tile_png"], bytes)
+                        self.assertGreater(len(tile["tile_png"]), 0)
             finally:
                 conn.close()
 
+            # Preview reads from DB
             out_html = Path(tmp) / "preview.html"
-            render_preview(previews, out_html)
+            render_preview(db_path, out_html)
             self.assertTrue(out_html.exists())
             content = out_html.read_text()
             self.assertIn("<!DOCTYPE html>", content)
+            self.assertIn("data:image/png;base64,", content)
+
+    def test_ingest_is_transactional(self):
+        """Re-ingesting the same gallery replaces images cleanly."""
+        with tempfile.TemporaryDirectory() as tmp:
+            images_dir = Path(tmp) / "gallery"
+            images_dir.mkdir()
+            (_solid(100, 100, (255, 0, 0))).save(images_dir / "red.png")
+
+            db_path = Path(tmp) / "tiles.duckdb"
+            ingest_gallery(images_dir, db_path, tile_side=32, show_progress=False)
+            ingest_gallery(images_dir, db_path, tile_side=32, show_progress=False)
+
+            conn = open_database(db_path)
+            ensure_schema(conn)
+            try:
+                images = get_all_images(conn)
+                self.assertEqual(len(images), 1)
+            finally:
+                conn.close()

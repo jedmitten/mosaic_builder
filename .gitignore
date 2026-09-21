@@ -204,3 +204,12 @@ Icon
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# generated artifacts
+*.duckdb
+*.duckdb.wal
+preview.html
+mosaic.png
+match.json
+.uv-cache/
+gallery

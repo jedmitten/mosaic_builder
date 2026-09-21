@@ -1,28 +1,63 @@
 # mosaic-builder
 
-A Python toolkit for building photo mosaics backed by DuckDB. The current codebase provides the foundational ingestion and inspection utilities used to slice galleries into “character tiles”, store their metrics in DuckDB, and review the results in a lightweight HTML preview. During ingestion, every crop is resized to a uniform square (your chosen `--tile-side`) before descriptors/PNGs are stored so later stages—matching, indexing, rendering—operate on consistent tile dimensions without additional transforms.
+A Python toolkit for building photo mosaics backed by DuckDB. A gallery of photos is sliced into
+texture-scored square "character tiles", each tile is normalized to a uniform side length, and its
+color descriptors (mean RGB and mean CIE-LAB) are stored in DuckDB alongside the tile PNG. Later
+stages match those tiles against a target image and render the mosaic.
 
 ## Current State
 
-- Minimal `pyproject.toml` + `uv.lock` for dependency management.
-- No source code yet—future modules will be rebuilt from scratch.
-- `CONTEXT.md` captures the legacy goals, validated assumptions, and next steps for the new implementation.
+- **Ingestion** — `ingest.py` extracts character tiles, resizes them to a uniform square, computes
+  RGB and LAB descriptors, and writes them to DuckDB inside a per-image transaction.
+- **Storage** — `duckdb_store.py` owns the schema, a versioned schema guard, read helpers, and
+  transactional upserts.
+- **Preview** — `preview.py` renders an HTML gallery straight from the database so tile coverage
+  and quality can be audited without re-ingesting.
+- **Matching and rendering** — not built yet. See `PLAN.md` for the task-by-task plan.
 
 ## Getting Started
 
 ```bash
 uv sync
-uv run python -m unittest discover -s tests
+uv run pytest tests/ -q
 ```
 
 ## Quickstart
 
 ```bash
-# Generate preview.html from images in ./gallery
-uv run python -m mosaic_builder.preview gallery --db mosaic.duckdb --out preview.html --tile-side 64
-# Add --no-progress for quiet output (e.g., CI)
-# uv run python -m mosaic_builder.preview gallery --no-progress
-open preview.html  # or use your browser
+# 1. Ingest a gallery directory into the database
+uv run python -m mosaic_builder.ingest gallery --db mosaic.duckdb --tile-side 64
+
+# 2. Render an HTML preview of what was stored
+uv run python -m mosaic_builder.preview --db mosaic.duckdb --out preview.html --first-n 25
+
+open preview.html
 ```
 
-Use `CONTEXT.md` to understand the intended direction before adding new packages or modules.
+### Ingest flags
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `images_dir` (positional) | required | Directory of source photos |
+| `--db` | `mosaic.duckdb` | DuckDB file to write |
+| `--tile-side` | `64` | Edge length in pixels every tile is resized to |
+| `--max-tiles` | `3` | Maximum character tiles extracted per photo |
+| `--no-progress` | off | Suppress the progress bar (use in CI) |
+
+### Preview flags
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--db` | `mosaic.duckdb` | DuckDB file to read |
+| `--out` | `preview.html` | Output HTML path |
+| `--first-n` | all | Show only the first N images |
+| `--random-n` | all | Show a random N images (mutually exclusive with `--first-n`) |
+
+## Notes
+
+- One database file holds tiles at a single `--tile-side`. To experiment with a different side
+  length, delete the `.duckdb` file and re-ingest.
+- The schema is versioned. Opening a database written by an older version raises a clear error
+  telling you to delete and re-ingest; there are no migrations.
+- `CONTEXT.md` captures the guiding goals and assumptions. `PLAN.md` is the execution plan for the
+  remaining work.

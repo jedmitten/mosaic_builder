@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import io
+import math
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 import numpy as np
 from PIL import Image, ImageOps
-
 
 SUPPORTED_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 
@@ -38,9 +38,11 @@ def _candidate_offsets(length: int, side: int) -> Iterable[int]:
 
 
 def extract_character_tiles(img: Image.Image, max_tiles: int = 3) -> list[TileCrop]:
-    """Extract up to `max_tiles` square crops ranked by texture."""
-    base = ImageOps.exif_transpose(img).convert("RGB")
-    w, h = base.size
+    """Extract up to `max_tiles` square crops ranked by texture.
+
+    Caller is responsible for EXIF transpose (see load_image).
+    """
+    w, h = img.size
     side = min(w, h)
     if side == 0:
         return []
@@ -48,11 +50,11 @@ def extract_character_tiles(img: Image.Image, max_tiles: int = 3) -> list[TileCr
     candidates: list[TileCrop] = []
     if w >= h:
         for x in _candidate_offsets(w, side):
-            crop = base.crop((x, 0, x + side, side))
+            crop = img.crop((x, 0, x + side, side))
             candidates.append(TileCrop(image=crop, box=(x, 0, x + side, side), score=texture_score(crop)))
     if h > w or not candidates:
         for y in _candidate_offsets(h, side):
-            crop = base.crop((0, y, side, y + side))
+            crop = img.crop((0, y, side, y + side))
             candidates.append(TileCrop(image=crop, box=(0, y, side, y + side), score=texture_score(crop)))
 
     candidates.sort(key=lambda item: item.score, reverse=True)
@@ -69,6 +71,54 @@ def mean_rgb(tile: Image.Image) -> tuple[float, float, float]:
     g = float(arr[..., 1].mean())
     b = float(arr[..., 2].mean())
     return r, g, b
+
+
+def _srgb_to_lab(arr_rgb: np.ndarray) -> np.ndarray:
+    """Convert an (H, W, 3) sRGB uint8 array to CIE-LAB float32.
+
+    Pipeline: sRGB [0-255] → linear RGB → XYZ (D65) → LAB.
+    """
+    # Linearize sRGB
+    rgb = arr_rgb.astype(np.float32) / 255.0
+    mask = rgb > 0.04045
+    rgb = np.where(mask, ((rgb + 0.055) / 1.055) ** 2.4, rgb / 12.92)
+
+    # sRGB → XYZ (D65 white point)
+    # fmt: off
+    M = np.array([
+        [0.4124564, 0.3575761, 0.1804375],
+        [0.2126729, 0.7151522, 0.0721750],
+        [0.0193339, 0.1191920, 0.9503041],
+    ], dtype=np.float32)
+    # fmt: on
+    xyz = rgb @ M.T
+
+    # Normalize by D65 white point
+    xyz[..., 0] /= 0.95047
+    xyz[..., 2] /= 1.08883
+
+    # XYZ → LAB
+    epsilon = 0.008856
+    kappa = 903.3
+    mask = xyz > epsilon
+    f = np.where(mask, np.cbrt(xyz), (kappa * xyz + 16.0) / 116.0)
+
+    L = 116.0 * f[..., 1] - 16.0
+    a = 500.0 * (f[..., 0] - f[..., 1])
+    b = 200.0 * (f[..., 1] - f[..., 2])
+    return np.stack([L, a, b], axis=-1)
+
+
+def mean_lab(tile: Image.Image) -> tuple[float, float, float]:
+    """Compute mean CIE-LAB values for a tile (sRGB input)."""
+    arr = np.asarray(tile.convert("RGB"), dtype=np.uint8)
+    lab = _srgb_to_lab(arr)
+    return float(lab[..., 0].mean()), float(lab[..., 1].mean()), float(lab[..., 2].mean())
+
+
+def delta_e(lab1: tuple[float, float, float], lab2: tuple[float, float, float]) -> float:
+    """CIE76 Delta-E distance between two LAB color tuples."""
+    return math.sqrt((lab1[0] - lab2[0]) ** 2 + (lab1[1] - lab2[1]) ** 2 + (lab1[2] - lab2[2]) ** 2)
 
 
 def tile_png_bytes(tile: Image.Image) -> bytes:
