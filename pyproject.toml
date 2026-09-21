@@ -22,6 +22,7 @@ package = true
 
 [dependency-groups]
 dev = [
+    "ipykernel>=6.30.0",
     "nbconvert>=7.17.0",
     "nbstripout>=0.8.1",
     "pre-commit>=4.4.0",
