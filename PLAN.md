@@ -1,5 +1,32 @@
 # Mosaic Builder — Execution Plan
 
+## Status: all tasks complete (Tasks 0-7)
+
+Every task below has been implemented, verified, and committed. The suite is at **77 tests**,
+`ruff check`, `ruff format` and `nbstripout` are clean, and the full pipeline runs end to end:
+
+```bash
+uv run mosaic-builder ingest gallery --db mosaic.duckdb --tile-side 64
+uv run mosaic-builder validate --db mosaic.duckdb
+uv run mosaic-builder mosaic target.png --db mosaic.duckdb --grain 32 --out mosaic.png
+```
+
+| Task | State | Notes |
+|---|---|---|
+| 0 — Commit phase 1, repo hygiene | Done | Gallery symlink untracked; the stale database and the 75 MB preview were moved aside, not deleted |
+| 1 — Schema versioning, store fixes | Done | `schema_meta` + `SchemaVersionError`; verified against the real stale database |
+| 2 — Target analysis | Done | Vectorised; verified cell-by-cell against per-cell ground truth |
+| 3 — Greedy matching | Done | Verified against a brute-force reference at four constraint settings |
+| 4 — Renderer | Done | Output verified pixel-identical to the database for sampled cells |
+| 5 — Unified CLI | Done | Six subcommands plus the `mosaic-builder` script entry point |
+| 6 — Validate report | Done | Run it on your own gallery before rendering |
+| 7 — Docs, notebook, polish | Done | Notebook runs without a personal gallery; `ipykernel` added so it executes |
+
+Two items were pulled forward out of Task 7 because they touched code other tasks were about to
+edit: the shared `progress.py` helper, and `cli.py` for friendly command-line errors.
+
+What is **not** done is listed in section 6, "After this plan". Start there.
+
 This document is written for an implementing agent. Follow the tasks **in order**.
 Each task is self-contained: it says what to change, what "done" means, and how to verify.
 Do not skip ahead. Do not invent extra features. If a task's verification fails, fix it before moving on.
