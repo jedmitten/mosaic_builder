@@ -1,6 +1,6 @@
 # Mosaic Builder — Execution Plan
 
-## Status: all tasks complete (Tasks 0-7)
+## Status: all tasks complete (Tasks 0-8)
 
 Every task below has been implemented, verified, and committed. The suite is at **77 tests**,
 `ruff check`, `ruff format` and `nbstripout` are clean, and the full pipeline runs end to end:
@@ -21,6 +21,7 @@ uv run mosaic-builder mosaic target.png --db mosaic.duckdb --grain 32 --out mosa
 | 5 — Unified CLI | Done | Six subcommands plus the `mosaic-builder` script entry point |
 | 6 — Validate report | Done | Run it on your own gallery before rendering |
 | 7 — Docs, notebook, polish | Done | Notebook runs without a personal gallery; `ipykernel` added so it executes |
+| 8 — Showcase example | Done | Real urinal-target mosaic from the full gallery, committed and shown in the README |
 
 Two items were pulled forward out of Task 7 because they touched code other tasks were about to
 edit: the shared `progress.py` helper, and `cli.py` for friendly command-line errors.
@@ -468,6 +469,143 @@ uv run python -m mosaic_builder mosaic examples/target_images/target_8bit_checke
 5. **README.md:** Quickstart becomes the three-command flow: `ingest` → `validate` → `mosaic`. Document every CLI flag in a table. Explain `grain` vs `tile_side` in two sentences.
 
 **Done when:** `uv run pre-commit run --all-files` passes, every command in the README runs as written, and `git status` is clean.
+
+---
+
+### Task 8 — Showcase example: a real mosaic committed to the repo
+
+**Goal:** The notebook produces one real mosaic of a chosen target, built from the full gallery, and
+the result is committed so the repository proves the pipeline works without anyone running
+anything. The README shows it as the example.
+
+**Why this exists:** the notebook has all outputs stripped (deliberately, to keep it at 25 KB), so
+today it demonstrates nothing until executed, and its demo database has only three photos, so even
+when executed the mosaic is crude. This task adds evidence that lives in git.
+
+**The chosen target:** `examples/target_images/target_urinal_01.avif` (750×750, user-supplied).
+Do not substitute another image and do not download one. `examples/target_images/benchy_01.JPG`
+is also present but is **not** used by this task; do not commit it (2.6 MB, unused).
+
+**Files:**
+- `notebooks/visual_demo.ipynb` — add Section 10; delete the empty first code cell
+- `examples/target_images/target_urinal_01.png` (new, generated) — normalized copy of the target
+- `examples/output/urinal_mosaic.png` (new, generated)
+- `examples/output/urinal_comparison.png` (new, generated)
+- `examples/output/urinal_showcase.json` (new, generated)
+- `tests/test_examples.py` (new)
+- `README.md`
+
+**Facts you need:**
+- The full-gallery database lives at the repo root as `mosaic.duckdb` and is gitignored. It has
+  480 images and 1440 tiles at `tile_side` 64. If it is missing, build it first:
+  `uv run mosaic-builder ingest gallery --db mosaic.duckdb --tile-side 64` (about two minutes).
+- AVIF decoding depends on how Pillow was built. It works on this machine (`PIL.features.check("avif")`
+  is True) but may not elsewhere. That is why the notebook writes a PNG copy of the target and
+  every downstream reference uses the PNG, never the AVIF.
+- `tiler.load_image(path)` opens any format Pillow supports, applies EXIF orientation, and returns
+  RGB. `SUPPORTED_EXTS` in `tiler.py` only governs which files *gallery ingestion* picks up; it does
+  not restrict targets.
+- Public functions: `matcher.run_match(target_path, db_path, *, grain, tile_side=None, max_reuse=0,
+  min_repeat_dist=0, show_progress=True) -> MatchResult`, `matcher.summarize(result) -> str`,
+  `renderer.assemble_mosaic(result, conn, *, show_progress=False) -> Image`,
+  `duckdb_store.open_database`, `duckdb_store.ensure_schema`.
+- The notebook runs with `notebooks/` as its working directory, so the repo root is `Path.cwd().parent`.
+
+#### Showcase parameters (single source of truth)
+
+Put these in one code cell as module-level constants, exactly these names:
+
+| Constant | Value | Reason |
+|---|---|---|
+| `SHOWCASE_SOURCE` | `ROOT / "examples/target_images/target_urinal_01.avif"` | the chosen target |
+| `SHOWCASE_TARGET` | `ROOT / "examples/target_images/target_urinal_01.png"` | portable normalized copy |
+| `SHOWCASE_MAX_SIDE` | `1024` | never upscale; downscale only if larger |
+| `SHOWCASE_CELLS` | `30` | cells along the short side |
+| `SHOWCASE_MAX_REUSE` | `4` | from the measured tradeoff table |
+| `SHOWCASE_MIN_REPEAT_DIST` | `3` | from the measured tradeoff table |
+| `SHOWCASE_BLEND` | `0.0` | the committed mosaic is unblended; blending would hide matching errors |
+| `FULL_DB` | `ROOT / "mosaic.duckdb"` | full-gallery database |
+| `OUTPUT_DIR` | `ROOT / "examples/output"` | committed outputs |
+
+`grain` is derived, not chosen: `grain = max(8, min(target.width, target.height) // SHOWCASE_CELLS)`.
+For the 750×750 target this gives `grain = 25`, a 30×30 grid, and a 1920×1920 mosaic at tile side 64.
+Any other target of your choosing gets roughly 30 cells on its short side automatically.
+
+#### Steps
+
+1. **Delete the empty first code cell** of the notebook (cell index 0 has no source).
+
+2. **Add Section 10, "Showcase: real gallery, real target"**, after Section 9 and before the
+   "Measured tradeoff" markdown cell. It has one markdown cell explaining what it does and why the
+   outputs are committed, followed by these code cells:
+
+   a. **Constants cell** — the table above, plus `ROOT = Path.cwd().parent`.
+
+   b. **Normalize the target.** Load `SHOWCASE_SOURCE` with `load_image`. If its longer side
+      exceeds `SHOWCASE_MAX_SIDE`, resize with `Image.Resampling.LANCZOS` preserving aspect ratio.
+      Save as PNG to `SHOWCASE_TARGET`. Display it with `show_images`. This cell must run even
+      without the gallery, so the PNG copy is always regenerable.
+
+   c. **Guard cell.** If `FULL_DB` does not exist, print exactly one line beginning `NOTE:` that
+      names the missing path and the ingest command, set `SHOWCASE_AVAILABLE = False`, and every
+      later cell in the section starts with `if SHOWCASE_AVAILABLE:`. Otherwise open it, call
+      `ensure_schema`, read `get_tile_sides`, and set `SHOWCASE_AVAILABLE = True`. Never let a
+      missing database raise inside the notebook.
+
+   d. **Match and render.** Compute `grain` as above. Call `run_match(SHOWCASE_TARGET, FULL_DB,
+      grain=grain, max_reuse=SHOWCASE_MAX_REUSE, min_repeat_dist=SHOWCASE_MIN_REPEAT_DIST,
+      show_progress=False)`, then `assemble_mosaic`. Close the connection in a `finally`. Print
+      `summarize(result)`.
+
+   e. **Save outputs.** Create `OUTPUT_DIR`. Save the mosaic as `urinal_mosaic.png`. Build the
+      comparison as one image: the normalized target on the left and the mosaic on the right, each
+      scaled to the same height, separated by a 16-pixel dark gutter, total width at most 1600
+      pixels; save as `urinal_comparison.png`. Write `urinal_showcase.json` with exactly these keys:
+      `target`, `target_size` (`[w, h]`), `grain`, `tile_side`, `max_reuse`, `min_repeat_dist`,
+      `blend`, `rows`, `cols`, `mosaic_size` (`[w, h]`), `mean_delta_e` (rounded to 3 places),
+      `distinct_tiles`, `gallery_images`, `gallery_tiles`, `cli` (the exact equivalent
+      `mosaic-builder mosaic ...` command as one string). Paths in the JSON are repo-relative with
+      forward slashes.
+
+   f. **Display** the comparison with `show_images` and print the JSON.
+
+3. **Size ceilings**, checked in the save cell and asserted: `urinal_mosaic.png` < 4 MB,
+   `urinal_comparison.png` < 1 MB, `target_urinal_01.png` < 2 MB. If the mosaic PNG exceeds its
+   ceiling, save it with `optimize=True`; if still over, stop and report rather than committing it.
+
+4. **`tests/test_examples.py`** — tests that run anywhere, with no gallery, against the committed
+   files only. Skip the whole module with a clear reason if `examples/output/urinal_showcase.json`
+   is absent (so a fresh clone before the showcase has been generated still has a green suite).
+   1. The sidecar JSON loads and has every key listed in step 2e.
+   2. `mosaic_size == [cols * tile_side, rows * tile_side]` and the PNG on disk has that size.
+   3. `rows == target_h // grain` and `cols == target_w // grain` using `target_size`.
+   4. The normalized target PNG exists, opens, and its longer side is ≤ 1024.
+   5. The comparison PNG exists, opens, and is ≤ 1600 wide.
+   6. Every file is under its size ceiling from step 3.
+   7. `cli` contains `--grain {grain}`, `--max-reuse {max_reuse}`, `--min-repeat-dist {min_repeat_dist}`,
+      and the target PNG path.
+
+5. **README.** Add a section "Example" directly under "Quickstart". It embeds
+   `examples/output/urinal_comparison.png` with alt text, shows the exact `cli` command from the
+   sidecar, and states the numbers from the sidecar in a short table: grid, distinct tiles, mean
+   colour error, gallery size. Add one sentence saying the outputs were generated by Section 10 of
+   the notebook and can only be regenerated by someone with the gallery, which is why they are
+   committed.
+
+6. **Commit** in this order, one commit each: notebook + generated files
+   (`commit showcase example: urinal target rendered from the full gallery`), then tests, then README.
+   Do not commit `benchy_01.JPG`. Do not commit `mosaic.duckdb`.
+
+**Done when:**
+- `uv run jupyter nbconvert --to notebook --execute notebooks/visual_demo.ipynb --output /tmp/x.ipynb`
+  succeeds with the gallery present, **and** succeeds again after temporarily renaming
+  `mosaic.duckdb` (the guard path). Rename it back.
+- `uv run pytest -q` passes with the new tests collected, not skipped.
+- `git status` is clean apart from `.vscode/settings.json` and `benchy_01.JPG`.
+- The README image renders on the GitHub page for the branch.
+- Running the `cli` command from the sidecar yourself produces a mosaic with the same
+  `rows`, `cols`, `distinct_tiles`, and `mean_delta_e` (within 0.001) as the sidecar. This is the
+  proof that the notebook and the command line agree.
 
 ---
 
