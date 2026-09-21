@@ -10,6 +10,8 @@ from mosaic_builder.duckdb_store import (
     get_all_tiles,
     get_tile_lab_descriptors,
     get_tile_png,
+    get_tile_pngs_bulk,
+    get_tile_sides,
     get_tiles_for_image,
     normalize_db_path,
     open_database,
@@ -25,10 +27,10 @@ def _make_conn(tmp: str) -> duckdb.DuckDBPyConnection:
     return conn
 
 
-def _sample_tile(*, tile_index: int = 0, tile_png: bytes = b"\x89PNG") -> dict:
+def _sample_tile(*, tile_index: int = 0, tile_png: bytes = b"\x89PNG", tile_side: int = 32) -> dict:
     """Return a minimal valid tile dict with LAB fields."""
     return {
-        "tile_side": 32,
+        "tile_side": tile_side,
         "tile_index": tile_index,
         "crop_box": "0,0,32,32",
         "coverage": 0.5,
@@ -193,5 +195,108 @@ class DuckDBStoreTest(TestCase):
                 self.assertEqual(len(descs), 1)
                 self.assertIn("mean_L", descs[0])
                 self.assertNotIn("tile_png", descs[0])
+            finally:
+                conn.close()
+
+    def test_get_all_tiles_random_n(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = _make_conn(tmp)
+            try:
+                img_id = upsert_image(conn, "/a.png", 100, 100)
+                upsert_tiles(conn, img_id, [_sample_tile(tile_index=i) for i in range(5)])
+
+                sampled = get_all_tiles(conn, random_n=3)
+                self.assertEqual(len(sampled), 3)
+                keys = {(t["image_id"], t["tile_index"]) for t in sampled}
+                self.assertEqual(len(keys), 3)
+
+                oversampled = get_all_tiles(conn, random_n=99)
+                self.assertEqual(len(oversampled), 5)
+            finally:
+                conn.close()
+
+    def test_get_tile_png_filters_by_tile_side(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = _make_conn(tmp)
+            try:
+                img_id = upsert_image(conn, "/a.png", 100, 100)
+                upsert_tiles(
+                    conn,
+                    img_id,
+                    [
+                        _sample_tile(tile_index=0, tile_side=32, tile_png=b"\x89PNG_32"),
+                        _sample_tile(tile_index=0, tile_side=64, tile_png=b"\x89PNG_64"),
+                    ],
+                )
+                self.assertEqual(get_tile_png(conn, img_id, 0, tile_side=32), b"\x89PNG_32")
+                self.assertEqual(get_tile_png(conn, img_id, 0, tile_side=64), b"\x89PNG_64")
+            finally:
+                conn.close()
+
+    def test_get_tile_lab_descriptors_filters_by_tile_side(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = _make_conn(tmp)
+            try:
+                img_id = upsert_image(conn, "/a.png", 100, 100)
+                upsert_tiles(
+                    conn,
+                    img_id,
+                    [
+                        _sample_tile(tile_index=0, tile_side=32),
+                        _sample_tile(tile_index=1, tile_side=64),
+                    ],
+                )
+                self.assertEqual(len(get_tile_lab_descriptors(conn)), 2)
+                only_64 = get_tile_lab_descriptors(conn, tile_side=64)
+                self.assertEqual(len(only_64), 1)
+                self.assertEqual(only_64[0]["tile_side"], 64)
+            finally:
+                conn.close()
+
+    def test_get_tile_sides(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = _make_conn(tmp)
+            try:
+                self.assertEqual(get_tile_sides(conn), [])
+                img_id = upsert_image(conn, "/a.png", 100, 100)
+                upsert_tiles(
+                    conn,
+                    img_id,
+                    [
+                        _sample_tile(tile_index=0, tile_side=64),
+                        _sample_tile(tile_index=1, tile_side=32),
+                    ],
+                )
+                self.assertEqual(get_tile_sides(conn), [32, 64])
+            finally:
+                conn.close()
+
+    def test_get_tile_pngs_bulk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = _make_conn(tmp)
+            try:
+                img_id = upsert_image(conn, "/a.png", 100, 100)
+                upsert_tiles(
+                    conn,
+                    img_id,
+                    [_sample_tile(tile_index=i, tile_png=f"PNG{i}".encode()) for i in range(3)],
+                )
+                result = get_tile_pngs_bulk(
+                    conn,
+                    [(img_id, 0), (img_id, 2), (999, 7)],
+                    tile_side=32,
+                )
+                self.assertEqual(
+                    result,
+                    {(img_id, 0): b"PNG0", (img_id, 2): b"PNG2"},
+                )
+            finally:
+                conn.close()
+
+    def test_get_tile_pngs_bulk_empty_keys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = _make_conn(tmp)
+            try:
+                self.assertEqual(get_tile_pngs_bulk(conn, [], tile_side=32), {})
             finally:
                 conn.close()
