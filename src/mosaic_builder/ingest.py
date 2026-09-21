@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .duckdb_store import ensure_schema, open_database, upsert_image, upsert_tiles
+from .progress import iter_with_progress
 from .tiler import (
     extract_character_tiles,
     iter_gallery_images,
@@ -16,6 +17,9 @@ from .tiler import (
     resize_tile,
     tile_png_bytes,
 )
+
+# Backwards-compatible alias; the implementation now lives in progress.py.
+_iter_with_progress = iter_with_progress
 
 
 @dataclass(frozen=True)
@@ -36,7 +40,7 @@ def ingest_gallery(
     conn = open_database(db_path)
     ensure_schema(conn)
     paths = list(iter_gallery_images(images_dir))
-    progress_iter = _iter_with_progress(paths, desc="Ingesting images", enabled=show_progress)
+    progress_iter = iter_with_progress(paths, desc="Ingesting images", enabled=show_progress)
     image_count = 0
     tile_count = 0
     try:
@@ -82,24 +86,6 @@ def ingest_gallery(
     finally:
         conn.close()
     return IngestSummary(images=image_count, tiles=tile_count)
-
-
-def _iter_with_progress(items, desc: str, enabled: bool):
-    sequence = list(items)
-    total = len(sequence)
-    if not enabled or total == 0:
-        for item in sequence:
-            yield item
-        return
-
-    bar_width = 30
-    print(f"{desc}: starting ({total} items)")
-    for idx, item in enumerate(sequence, 1):
-        filled = int(bar_width * idx / total)
-        bar = "#" * filled + "-" * (bar_width - filled)
-        print(f"\r{desc}: [{bar}] {idx}/{total}", end="", flush=True)
-        yield item
-    print()
 
 
 def main() -> None:

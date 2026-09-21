@@ -30,8 +30,8 @@ These are non-obvious and will cause bugs if you guess.
 | One DB = one tile side | Multiple `tile_side` values in one DB are **not supported** (re-ingesting deletes all tiles for an image regardless of side). Every matcher/renderer read must still filter `WHERE tile_side = ?` so behaviour is well-defined. |
 | LAB conversion | `tiler._srgb_to_lab(arr)` converts an `(H, W, 3)` uint8 sRGB array to float32 LAB. `tiler.mean_lab(img)` returns `(L, a, b)`. `tiler.delta_e(lab1, lab2)` is CIE76 Euclidean distance. Reuse these; do not reimplement. |
 | Target images may be RGBA | `examples/target_images/target_8bit_checkered_floor_01.png` is 1024×1024 **RGBA**. Always `.convert("RGB")` after loading (`tiler.load_image` already does this). |
-| Progress bar helper | `ingest._iter_with_progress(items, desc, enabled)` is a generator that prints a text progress bar. Reuse it; do not write another. |
-| Schema creation | `duckdb_store.ensure_schema(conn)` runs `CREATE ... IF NOT EXISTS`. It does **not** add columns to existing tables. An old DB will pass `ensure_schema` and then fail on the first `SELECT mean_L`. Task 1 fixes this. |
+| Progress bar helper | `progress.iter_with_progress(items, desc, enabled)` is a generator that prints a text progress bar. Reuse it; do not write another. `ingest._iter_with_progress` is a backwards-compatible alias. |
+| Schema version | After Task 1, the database carries a `schema_meta` row holding `SCHEMA_VERSION`. `ensure_schema` raises `SchemaVersionError` for a legacy, older, or newer database. There are no migrations: the fix is always to delete the `.duckdb` file and re-ingest. |
 | Transactions | `ingest_gallery` wraps each image in `BEGIN`/`COMMIT`/`ROLLBACK`. Keep that pattern for any new write path. |
 | Public API | `mosaic_builder/__init__.py` re-exports the store functions. When you add a store function, add it to both the import list and `__all__`. |
 | Toolchain | Python 3.10, duckdb 1.4.2, pillow 12, numpy 2.2. Use `uv run ...` for everything. |
@@ -122,27 +122,113 @@ New files: `src/mosaic_builder/matcher.py`, `src/mosaic_builder/renderer.py`, `s
 
 ---
 
-### Task 1 — Fix store bugs and add schema guard
+### Task 1 — Schema versioning, store bug fixes
 
-**Goal:** Make `duckdb_store.py` safe to build on: detect old databases, fix random sampling, make tile lookups unambiguous.
+**Goal:** Make `duckdb_store.py` safe to build on: a database carries an explicit schema version,
+opening a stale or future database fails with a clear actionable error instead of a DuckDB internal
+error, and the known read bugs are fixed.
 
-**Files:** `src/mosaic_builder/duckdb_store.py`, `src/mosaic_builder/__init__.py`, `tests/test_duckdb_store.py`.
+**Files:** `src/mosaic_builder/duckdb_store.py`, `src/mosaic_builder/__init__.py`, `tests/test_duckdb_store.py`, `tests/test_schema_version.py` (new).
 
-**Steps:**
+#### 1a. Schema version (do this first)
 
-1. **Schema guard.** Add a module constant `EXPECTED_TILE_COLUMNS` (a `frozenset` of the 13 column names in `_TILE_COLS`). At the end of `ensure_schema`, read the actual columns with `DESCRIBE tiles` and, if any expected column is missing, raise `RuntimeError` with this exact message shape: `"Database schema is out of date (missing columns: ...). Delete the .duckdb file and re-ingest."`
-   - Test: create a DB, manually `CREATE TABLE tiles (...)` with only the old columns, call `ensure_schema`, assert `RuntimeError` is raised and the message contains `mean_L`.
-2. **Fix `random_n`.** Replace the `USING SAMPLE (? ROWS)` query with `ORDER BY random() LIMIT {int(random_n)}` (f-string, same style already used for `limit`/`offset`).
-   - Test: insert 5 tiles, call `get_all_tiles(conn, random_n=3)`, assert exactly 3 rows come back and they are all distinct `(image_id, tile_index)` pairs.
-3. **Add `tile_side` to `get_tile_png`.** New signature: `get_tile_png(conn, image_id, tile_index, *, tile_side=None)`. When `tile_side` is not `None`, add `AND tile_side = ?` to the query. Existing callers and tests keep working.
-   - Test: insert two tiles with the same `(image_id, tile_index)` but different `tile_side` and different PNG bytes; assert each `tile_side` returns its own bytes.
-4. **Filter `get_tile_lab_descriptors` by tile side.** New signature: `get_tile_lab_descriptors(conn, *, tile_side=None)`. Same optional-filter pattern.
-5. **Add `get_tile_sides(conn) -> list[int]`.** Returns `SELECT DISTINCT tile_side FROM tiles ORDER BY tile_side`. Export it from `__init__.py`.
-   - Test: empty DB returns `[]`; after inserting tiles with sides 32 and 64 returns `[32, 64]`.
-6. **Add `get_tile_pngs_bulk(conn, keys, *, tile_side) -> dict[tuple[int,int], bytes]`.** `keys` is an iterable of `(image_id, tile_index)`. Fetch all matching rows in **one** query (build a temporary table or use `WHERE (image_id, tile_index) IN (...)` with a values list). The renderer in Task 4 depends on this.
-   - Test: insert 3 tiles, request 2 of them, assert the dict has exactly those 2 keys with the right bytes.
+Add to `duckdb_store.py`:
 
-**Done when:** all new tests pass, total test count ≥ 25, and `uv run python -c "import mosaic_builder as m; m.get_tile_sides"` succeeds.
+- `SCHEMA_VERSION: int = 2` — module constant. Bump it whenever `SCHEMA_STATEMENTS` changes shape.
+- `class SchemaVersionError(RuntimeError)` — raised for every schema mismatch. Export from `__init__.py`.
+- `EXPECTED_TILE_COLUMNS: frozenset[str]` — the 13 column names in `_TILE_COLS`.
+- A third entry in `SCHEMA_STATEMENTS`:
+  ```sql
+  CREATE TABLE IF NOT EXISTS schema_meta (
+      key VARCHAR PRIMARY KEY,
+      value VARCHAR NOT NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+  ```
+- `get_schema_version(conn) -> int | None` — returns the integer stored under key `schema_version`,
+  or `None` if the `schema_meta` table does not exist or holds no such row. Must not raise on a
+  database that has no `schema_meta` table.
+- `stamp_schema_version(conn, version: int = SCHEMA_VERSION) -> None` — upsert the row.
+
+Rewrite `ensure_schema(conn, statements=None)` to run in this exact order:
+
+1. **Before creating anything**, record whether a legacy database is present: `tiles` or `images`
+   exists in `information_schema.tables` **and** `schema_meta` does not.
+2. Execute the `CREATE TABLE IF NOT EXISTS` statements.
+3. If step 1 found a legacy database, raise `SchemaVersionError` whose message contains the words
+   `out of date` and `delete` and names the database's missing columns when any are missing.
+4. Read the version. If it is `None` (a genuinely fresh database), call `stamp_schema_version` and
+   skip to step 7.
+5. If the version is **less than** `SCHEMA_VERSION`, raise `SchemaVersionError` naming both versions
+   and instructing the user to delete the `.duckdb` file and re-ingest. There are no migrations.
+6. If the version is **greater than** `SCHEMA_VERSION`, raise `SchemaVersionError` saying the file
+   was written by a newer mosaic-builder and to upgrade the package.
+7. Column guard: `DESCRIBE tiles`, compare against `EXPECTED_TILE_COLUMNS`, and raise
+   `SchemaVersionError` listing every missing column.
+
+`ensure_schema` must be idempotent: calling it twice on a fresh database must not raise and must
+leave exactly one `schema_meta` row.
+
+**Tests — put these in `tests/test_schema_version.py`:**
+
+1. Fresh database: after `ensure_schema`, `get_schema_version(conn) == SCHEMA_VERSION`.
+2. Idempotent: call `ensure_schema` twice, no raise, and `SELECT count(*) FROM schema_meta` is 1.
+3. `get_schema_version` on a database with no `schema_meta` table returns `None` and does not raise.
+4. **Legacy database** (this is the bug that shipped): create `images` and `tiles` by hand with the
+   pre-LAB columns only (`image_id, tile_index, crop_box, coverage, score, mean_r, mean_g, mean_b,
+   descriptor, tile_png`), insert one row of each, then call `ensure_schema`. Assert
+   `SchemaVersionError` is raised and the message mentions `delete`. Assert it is **not** a
+   `duckdb.BinderException`.
+5. **Downgrade**: fresh database, then overwrite the stored version with `SCHEMA_VERSION - 1`, call
+   `ensure_schema`, assert `SchemaVersionError` naming both version numbers.
+6. **Future version**: store `SCHEMA_VERSION + 1`, assert `SchemaVersionError` whose message
+   mentions upgrading.
+7. **Missing column guard**: stamp the correct version but create a `tiles` table missing `mean_L`;
+   assert `SchemaVersionError` whose message contains `mean_L`.
+8. `ingest_gallery` against a legacy database surfaces `SchemaVersionError` rather than a DuckDB
+   error (build the legacy database, then call `ingest_gallery` on a two-image temp gallery).
+
+#### 1b. Store bug fixes
+
+1. **Fix `random_n`.** `get_all_tiles(conn, random_n=N)` currently raises
+   `Parser Error: Only constants are supported in sample clause`. Replace the `USING SAMPLE (? ROWS)`
+   query with `ORDER BY random() LIMIT {int(random_n)}`.
+   - Test: insert 5 tiles, request `random_n=3`, assert exactly 3 rows and all
+     `(image_id, tile_index)` pairs distinct. Assert `random_n=99` on 5 tiles returns 5.
+2. **Add `tile_side` to `get_tile_png`.** New signature
+   `get_tile_png(conn, image_id, tile_index, *, tile_side=None)`; when not `None`, add
+   `AND tile_side = ?`. Existing callers keep working.
+   - Test: insert two tiles sharing `(image_id, tile_index)` but with different `tile_side` and
+     different PNG bytes; assert each side returns its own bytes.
+3. **Filter `get_tile_lab_descriptors` by tile side.** New signature
+   `get_tile_lab_descriptors(conn, *, tile_side=None)`, same optional-filter pattern.
+4. **Add `get_tile_sides(conn) -> list[int]`** — `SELECT DISTINCT tile_side FROM tiles ORDER BY tile_side`.
+   - Test: empty database returns `[]`; after inserting sides 32 and 64 returns `[32, 64]`.
+5. **Add `get_tile_pngs_bulk(conn, keys, *, tile_side) -> dict[tuple[int, int], bytes]`** — `keys` is
+   an iterable of `(image_id, tile_index)`. Fetch every matching row in **one** query. Missing keys
+   are simply absent from the returned dict; do not raise. The renderer in Task 4 depends on this.
+   - Test: insert 3 tiles, request 2 of them plus 1 nonexistent key, assert the dict holds exactly
+     the 2 real keys with the right bytes.
+
+Export `SCHEMA_VERSION`, `SchemaVersionError`, `get_schema_version`, `get_tile_sides`, and
+`get_tile_pngs_bulk` from `__init__.py` (both the import list and `__all__`).
+
+**Done when:** `uv run pytest tests/ -q` passes with at least 35 tests, `uv run ruff check src tests`
+is clean, and this prints a friendly error rather than a traceback:
+```bash
+uv run python -c "
+import duckdb, tempfile, pathlib
+from mosaic_builder.duckdb_store import ensure_schema
+p = pathlib.Path(tempfile.mkdtemp())/'legacy.duckdb'
+c = duckdb.connect(str(p))
+c.execute('CREATE TABLE images (image_id INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL)')
+c.execute('CREATE TABLE tiles (image_id INTEGER NOT NULL, tile_index INTEGER NOT NULL, crop_box TEXT NOT NULL, coverage REAL NOT NULL, score REAL NOT NULL, mean_r REAL NOT NULL, mean_g REAL NOT NULL, mean_b REAL NOT NULL, tile_png BLOB NOT NULL)')
+try:
+    ensure_schema(c)
+except Exception as e:
+    print(type(e).__name__, e)
+"
+```
 
 ---
 
@@ -296,13 +382,13 @@ open mosaic.png
 
 **Steps:**
 
-1. Create an argparse parser with subparsers: `ingest`, `preview`, `match`, `render`, `mosaic`. Each of the first four delegates to the existing module's argument set (move each module's parser construction into a function `build_parser(sub=None)` so it can be attached as a subparser; keep `python -m mosaic_builder.ingest` working).
+1. Create an argparse parser with subparsers: `ingest`, `preview`, `match`, `render`, `mosaic`, `validate`. Each of these except `mosaic` delegates to the existing module's argument set (move each module's parser construction into a function `build_parser(sub=None)` so it can be attached as a subparser; keep `python -m mosaic_builder.ingest` working).
 2. `mosaic` subcommand takes `TARGET --db --grain [--tile-side] [--max-reuse] [--min-repeat-dist] [--blend] --out mosaic.png [--keep-match match.json]`. It calls `run_match` then `run_render` in memory (no JSON round-trip unless `--keep-match` is given).
 3. Add `[project.scripts] mosaic-builder = "mosaic_builder.__main__:main"` to `pyproject.toml` so `uv run mosaic-builder ...` also works.
 
 **Tests:**
 
-1. `python -m mosaic_builder --help` exits 0 and lists all five subcommands (use `subprocess.run` with `sys.executable`).
+1. `python -m mosaic_builder --help` exits 0 and lists all six subcommands (use `subprocess.run` with `sys.executable`).
 2. End-to-end in a temp dir: write 3 solid-colour gallery images, run `ingest`, then `mosaic` against a 64×64 solid-colour target with `--grain 16`. Assert the output PNG exists and is 4×tile_side square.
 
 **Done when:** tests pass and this one command produces a mosaic from scratch:
@@ -316,7 +402,9 @@ uv run python -m mosaic_builder mosaic examples/target_images/target_8bit_checke
 
 **Goal:** A read-only report that tells the user whether the gallery is good enough before they spend time rendering.
 
-**Files:** `src/mosaic_builder/validate.py` (new), `tests/test_validate.py` (new), `__main__.py` (add `validate` subcommand).
+**Files:** `src/mosaic_builder/validate.py` (new), `tests/test_validate.py` (new).
+
+`validate.py` ships its own `build_parser()` and `main()` so it runs as `python -m mosaic_builder.validate`. Task 5 wires it in as a subcommand; **do not edit `__main__.py` in this task.**
 
 **Function:** `gallery_report(conn, *, tile_side: int | None = None) -> dict` returning:
 
@@ -346,7 +434,7 @@ uv run python -m mosaic_builder mosaic examples/target_images/target_8bit_checke
 
 **Steps:**
 
-1. **Progress bars:** wire `_iter_with_progress` into the cell loop in `match_grid` (via `run_match`) and the paste loop in `assemble_mosaic`. Move `_iter_with_progress` from `ingest.py` to a new `src/mosaic_builder/progress.py` and import it from there in all three places. Keep a re-export in `ingest.py` so nothing breaks.
+1. **Progress bars:** ~~Move the helper to `progress.py`.~~ **Already done** — `src/mosaic_builder/progress.py` exists, `ingest.py` imports it, and `tests/test_progress.py` covers it. Remaining work: wire `iter_with_progress` into the cell loop in `match_grid` (via `run_match`) and the paste loop in `assemble_mosaic`.
 2. **Error messages:** every CLI must exit with code 1 and a one-line message (no traceback) for: missing target file, missing DB file, empty DB, out-of-date schema. Implement with a single `try/except (FileNotFoundError, ValueError, RuntimeError)` in each `main()`.
 3. **Notebook:** replace the three hard-coded gallery filenames with "the first three files returned by `tiler.iter_gallery_images(GALLERY_DIR)`". Strip all outputs (`uv run nbstripout notebooks/visual_demo.ipynb`). Add a final section that runs `run_match` + `assemble_mosaic` on `examples/target_images/target_8bit_checkered_floor_01.png` and displays the result. Then commit `notebooks/`.
 4. **CONTEXT.md:** remove the "CASCADE deletes" claim; add `matcher.py`, `renderer.py`, `validate.py`, `__main__.py` to the Modules list; replace "Next Build Steps" with the actual remaining ideas (see section 5 below).
