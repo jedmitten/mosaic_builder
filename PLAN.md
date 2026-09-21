@@ -463,6 +463,15 @@ uv run python -m mosaic_builder mosaic examples/target_images/target_8bit_checke
 Ideas worth doing next, in rough priority order. None of these should be started until Task 7 is committed.
 
 1. **Sub-cell descriptors:** store a 2×2 (or 3×3) LAB grid per tile and per cell; match on the concatenated vector. This is the single biggest quality lever.
+
+   **Measured evidence (480 photos, 1440 tiles, tile_side 64):** mean nearest-neighbour distance
+   between tiles is 1.06, and 1.46 when siblings from the same photo are excluded. Only 125 of 1440
+   tiles sit more than 3 units from their nearest neighbour in another photo. The gallery is
+   therefore heavily clustered in colour space: hundreds of tiles are effectively interchangeable on
+   mean colour alone. Two consequences follow. Reuse and repeat-distance constraints will be cheap
+   to satisfy, because near-equivalent substitutes are plentiful. And mean colour alone is close to
+   exhausted as a discriminator, so sub-cell descriptors are what will actually differentiate tiles.
+   Re-measure with `python -m mosaic_builder.validate` after any change to tile extraction.
 2. **Tile augmentation:** ingest horizontally flipped and 90°-rotated variants as extra tiles to enlarge a small gallery.
 3. **Hue-shifted tinting at render time:** blend each tile toward the cell's mean colour by a small factor to hide colour-match error.
 4. **Multi-side support done properly:** change `upsert_image` to preserve `image_id` and `upsert_tiles` to delete only `WHERE image_id = ? AND tile_side = ?`.
