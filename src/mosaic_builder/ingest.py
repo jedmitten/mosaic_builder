@@ -6,6 +6,7 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 
+from .cli import cli_errors
 from .duckdb_store import ensure_schema, open_database, upsert_image, upsert_tiles
 from .progress import iter_with_progress
 from .tiler import (
@@ -88,15 +89,27 @@ def ingest_gallery(
     return IngestSummary(images=image_count, tiles=tile_count)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Ingest a gallery into the mosaic database.")
+def build_parser(sub: argparse._SubParsersAction | None = None) -> argparse.ArgumentParser:
+    """Build this module's parser, standalone or attached to a subparsers action."""
+    description = "Ingest a gallery into the mosaic database."
+    parser = (
+        sub.add_parser("ingest", description=description, help=description)
+        if sub is not None
+        else argparse.ArgumentParser(description=description)
+    )
     parser.add_argument("images_dir", type=Path)
     parser.add_argument("--db", type=Path, default=Path("mosaic.duckdb"))
     parser.add_argument("--tile-side", type=int, default=64)
     parser.add_argument("--max-tiles", type=int, default=3)
     parser.add_argument("--no-progress", action="store_true", help="Disable progress output")
-    args = parser.parse_args()
+    parser.set_defaults(handler=run_from_args)
+    return parser
 
+
+def run_from_args(args: argparse.Namespace) -> None:
+    """Run ingestion from parsed arguments. Shared by this CLI and the dispatcher."""
+    if not Path(args.images_dir).is_dir():
+        raise FileNotFoundError(f"gallery directory not found: {args.images_dir}")
     summary = ingest_gallery(
         images_dir=args.images_dir,
         db_path=args.db,
@@ -105,6 +118,12 @@ def main() -> None:
         show_progress=not args.no_progress,
     )
     print(f"Ingested {summary.images} images, {summary.tiles} tiles into {args.db}")
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
+    with cli_errors():
+        run_from_args(args)
 
 
 if __name__ == "__main__":

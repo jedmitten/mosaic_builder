@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from .cli import cli_errors
 from .duckdb_store import (
     ensure_schema,
     get_tile_lab_descriptors,
@@ -281,8 +282,14 @@ def run_match(
     )
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Match a target image against the tile database.")
+def build_parser(sub: argparse._SubParsersAction | None = None) -> argparse.ArgumentParser:
+    """Build this module's parser, standalone or attached to a subparsers action."""
+    description = "Match a target image against the tile database."
+    parser = (
+        sub.add_parser("match", description=description, help=description)
+        if sub is not None
+        else argparse.ArgumentParser(description=description)
+    )
     parser.add_argument("target", type=Path)
     parser.add_argument("--db", type=Path, default=Path("mosaic.duckdb"))
     parser.add_argument("--grain", type=int, required=True, help="Cell edge length in target pixels")
@@ -291,11 +298,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-repeat-dist", type=int, default=0, help="0 means no spacing constraint")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--no-progress", action="store_true", help="Disable progress output")
+    parser.set_defaults(handler=run_from_args)
     return parser
 
 
-def main() -> None:
-    args = build_parser().parse_args()
+def run_from_args(args: argparse.Namespace) -> None:
+    """Run matching from parsed arguments. Shared by this CLI and the dispatcher."""
+    if not Path(args.target).exists():
+        raise FileNotFoundError(f"target image not found: {args.target}")
+    if not Path(args.db).exists():
+        raise FileNotFoundError(f"database not found: {args.db}")
     result = run_match(
         args.target,
         args.db,
@@ -306,12 +318,20 @@ def main() -> None:
         show_progress=not args.no_progress,
     )
     save_match_result(result, args.out)
+    print(summarize(result), "->", args.out)
+
+
+def summarize(result: MatchResult) -> str:
+    """One-line human summary of a match result."""
     mean_delta_e = sum(m.delta_e for m in result.matches) / len(result.matches) if result.matches else 0.0
     distinct = len({(m.image_id, m.tile_index) for m in result.matches})
-    print(
-        f"rows={result.rows} cols={result.cols} mean_delta_e={mean_delta_e:.3f} "
-        f"distinct_tiles={distinct} -> {args.out}"
-    )
+    return f"rows={result.rows} cols={result.cols} mean_delta_e={mean_delta_e:.3f} distinct_tiles={distinct}"
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
+    with cli_errors():
+        run_from_args(args)
 
 
 if __name__ == "__main__":

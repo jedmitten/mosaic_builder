@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .cli import cli_errors
 from .duckdb_store import (
     ensure_schema,
     get_all_images,
@@ -169,13 +170,14 @@ def build_parser(sub: argparse._SubParsersAction | None = None) -> argparse.Argu
         help="Restrict the report to this tile side (default: all sides in the database).",
     )
     parser.add_argument("--json", action="store_true", help="Print the report as JSON.")
+    parser.set_defaults(handler=run_from_args)
     return parser
 
 
-def main(argv: list[str] | None = None) -> None:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-
+def run_from_args(args: argparse.Namespace) -> None:
+    """Print the gallery report from parsed arguments. Shared with the dispatcher."""
+    if not Path(args.db).exists():
+        raise FileNotFoundError(f"database not found: {args.db}")
     conn = open_database(args.db)
     try:
         report = gallery_report(conn, tile_side=args.tile_side)
@@ -186,6 +188,12 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(report))
     else:
         print(_format_report(report))
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
+    with cli_errors():
+        run_from_args(args)
 
 
 if __name__ == "__main__":

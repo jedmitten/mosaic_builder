@@ -6,6 +6,7 @@ import argparse
 import base64
 from pathlib import Path
 
+from .cli import cli_errors
 from .duckdb_store import (
     ensure_schema,
     get_all_images,
@@ -89,17 +90,35 @@ def render_preview(
     return output_path
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate a preview HTML from the mosaic database.")
+def build_parser(sub: argparse._SubParsersAction | None = None) -> argparse.ArgumentParser:
+    """Build this module's parser, standalone or attached to a subparsers action."""
+    description = "Generate a preview HTML from the mosaic database."
+    parser = (
+        sub.add_parser("preview", description=description, help=description)
+        if sub is not None
+        else argparse.ArgumentParser(description=description)
+    )
     parser.add_argument("--db", type=Path, default=Path("mosaic.duckdb"))
     parser.add_argument("--out", type=Path, default=Path("preview.html"))
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--first-n", type=int, help="Show only the first N images")
     group.add_argument("--random-n", type=int, help="Show random N images")
-    args = parser.parse_args()
+    parser.set_defaults(handler=run_from_args)
+    return parser
 
+
+def run_from_args(args: argparse.Namespace) -> None:
+    """Render the preview from parsed arguments. Shared by this CLI and the dispatcher."""
+    if not Path(args.db).exists():
+        raise FileNotFoundError(f"database not found: {args.db}")
     render_preview(args.db, args.out, first_n=args.first_n, random_n=args.random_n)
     print(f"Wrote preview to {args.out}")
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
+    with cli_errors():
+        run_from_args(args)
 
 
 if __name__ == "__main__":
