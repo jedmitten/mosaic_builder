@@ -87,39 +87,98 @@ def test_match_grid_picks_nearest_tile():
     assert all(m.delta_e < 1.0 for m in result.matches)
 
 
-def test_match_grid_respects_max_reuse():
+def test_match_grid_diversity_zero_is_pure_nearest_match():
+    """The dial at 0 must reproduce plain nearest-colour matching exactly."""
     red = RED_LAB
     dark_red = mean_lab(Image.new("RGB", (8, 8), (150, 0, 0)))
-    orange = mean_lab(Image.new("RGB", (8, 8), (255, 140, 0)))
-    descriptors = [
-        _descriptor(1, 0, red),
-        _descriptor(2, 0, dark_red),
-        _descriptor(3, 0, orange),
-    ]
+    descriptors = [_descriptor(1, 0, red), _descriptor(2, 0, dark_red)]
     grid = _grid([red, red, red], rows=1, cols=3)
-    result = matcher.match_grid(grid, descriptors, tile_side=64, db_path="db", max_reuse=1)
+    result = matcher.match_grid(grid, descriptors, tile_side=64, db_path="db", diversity=0.0)
+
+    used = [(m.image_id, m.tile_index) for m in result.matches]
+    assert used == [(1, 0)] * 3
+
+
+def test_match_grid_diversity_spreads_tiles():
+    """Among comparable alternatives, the dial spreads usage across them.
+
+    Uses near-identical tiles because that is the realistic case: this
+    gallery's mean nearest-neighbour distance is around 1 Delta-E.
+    """
+    near = [
+        RED_LAB,
+        (RED_LAB[0] + 1.0, RED_LAB[1], RED_LAB[2]),
+        (RED_LAB[0] + 2.0, RED_LAB[1], RED_LAB[2]),
+    ]
+    descriptors = [_descriptor(i + 1, 0, lab) for i, lab in enumerate(near)]
+    grid = _grid([RED_LAB] * 3, rows=1, cols=3)
+    result = matcher.match_grid(grid, descriptors, tile_side=64, db_path="db", diversity=10.0)
 
     used = [(m.image_id, m.tile_index) for m in result.matches]
     assert len(set(used)) == 3
-    assert used[0] == (1, 0)
+    assert used[0] == (1, 0), "the first cell has no reuse history, so it takes the best match"
 
 
-def test_match_grid_respects_min_repeat_dist():
-    a_lab = RED_LAB
-    b_lab = (RED_LAB[0] + 0.5, RED_LAB[1], RED_LAB[2])
-    descriptors = [_descriptor(1, 0, a_lab), _descriptor(2, 0, b_lab)]
-    grid = _grid([a_lab] * 4, rows=1, cols=4)
-    result = matcher.match_grid(grid, descriptors, tile_side=64, db_path="db", min_repeat_dist=2)
+def test_match_grid_diversity_will_not_swap_to_a_far_worse_tile():
+    """Diversity is a preference, not a mandate.
 
-    used = [(m.image_id, m.tile_index) for m in result.matches]
-    for left, right in zip(used, used[1:], strict=False):
-        assert left != right
+    A blue tile is ~40 Delta-E from red — far past the point where a mismatch
+    reads as wrong — so even a maxed dial keeps reusing the red tile rather
+    than vandalising the mosaic for the sake of variety.
+    """
+    blue = mean_lab(Image.new("RGB", (8, 8), (0, 0, 255)))
+    descriptors = [_descriptor(1, 0, RED_LAB), _descriptor(2, 0, blue)]
+    grid = _grid([RED_LAB] * 3, rows=1, cols=3)
+    result = matcher.match_grid(grid, descriptors, tile_side=64, db_path="db", diversity=10.0)
+
+    assert all((m.image_id, m.tile_index) == (1, 0) for m in result.matches)
 
 
-def test_match_grid_falls_back_when_constraints_impossible():
+def test_match_grid_diversity_trades_fidelity_for_variety_monotonically():
+    """Turning the dial up must not reduce variety or improve mean delta-E."""
+    labs = [RED_LAB, mean_lab(Image.new("RGB", (8, 8), (200, 20, 20)))]
+    descriptors = [_descriptor(i, 0, lab) for i, lab in enumerate(labs)]
+    grid = _grid([RED_LAB] * 16, rows=4, cols=4)
+
+    previous_distinct, previous_mean = 0, -1.0
+    for dial in (0.0, 2.0, 5.0, 10.0):
+        result = matcher.match_grid(grid, descriptors, tile_side=64, db_path="db", diversity=dial)
+        distinct = len({(m.image_id, m.tile_index) for m in result.matches})
+        mean_delta_e = sum(m.delta_e for m in result.matches) / len(result.matches)
+        assert distinct >= previous_distinct
+        assert mean_delta_e >= previous_mean
+        previous_distinct, previous_mean = distinct, mean_delta_e
+
+
+def test_match_grid_diversity_does_not_degrade_when_tiles_are_scarce():
+    """Reuse pressure must never force in a wildly wrong tile.
+
+    With far fewer tiles than cells every tile has to repeat. Charging for
+    that unavoidable reuse from the first repeat made the penalty grow without
+    bound until it swamped colour distance, and the matcher started reaching
+    for terrible tiles purely to avoid repeating. Penalties are measured
+    against each tile's fair share (cells / tiles) so that cannot happen.
+    """
+    good = RED_LAB
+    acceptable = (RED_LAB[0] + 4.0, RED_LAB[1], RED_LAB[2])
+    terrible = mean_lab(Image.new("RGB", (8, 8), (0, 0, 255)))
+    descriptors = [
+        _descriptor(1, 0, good),
+        _descriptor(2, 0, acceptable),
+        _descriptor(3, 0, terrible),
+    ]
+    grid = _grid([RED_LAB] * 100, rows=10, cols=10)
+    result = matcher.match_grid(grid, descriptors, tile_side=64, db_path="db", diversity=10.0)
+
+    terrible_uses = sum(1 for m in result.matches if m.image_id == 3)
+    assert terrible_uses == 0, "a ~40 delta-E tile must never be forced in by reuse pressure"
+
+
+def test_match_grid_single_tile_still_fills_every_cell():
+    """With one tile there is no variety to find, but every cell must be filled."""
     descriptors = [_descriptor(1, 0, RED_LAB)]
     grid = _grid([RED_LAB] * 4, rows=2, cols=2)
-    result = matcher.match_grid(grid, descriptors, tile_side=64, db_path="db", max_reuse=1)
+    result = matcher.match_grid(grid, descriptors, tile_side=64, db_path="db", diversity=10.0)
 
     assert len(result.matches) == 4
     assert all((m.image_id, m.tile_index) == (1, 0) for m in result.matches)

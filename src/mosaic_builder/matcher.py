@@ -96,6 +96,49 @@ class MatchResult:
     matches: list[CellMatch]
 
 
+#: User-facing `--diversity` dial runs 0..10; this maps it onto the reuse
+#: penalty in Delta-E units per prior placement. At 10 a tile already used
+#: once is treated as ~6 Delta-E worse than it measures, which is half the
+#: "looks off" threshold of ~12 — strong pressure without ignoring colour.
+_DIVERSITY_SCALE = 0.6
+
+#: Default dial position. Measured on the 1440-tile gallery against the urinal
+#: target at grain 25: mean Delta-E 5.34 (well inside the ~12 "looks off"
+#: threshold), 587 distinct tiles, no tile placed more than 4 times. At 0 a
+#: single tile was used 138 times out of 900 cells. See the README table.
+_DEFAULT_DIVERSITY = 3.0
+
+#: Chebyshev radius within which a repeat is considered "nearby" and charged
+#: extra. Beyond this, only the global use count applies.
+_LOCAL_RADIUS = 4
+
+#: How much more a repeat immediately adjacent costs than a generic reuse.
+#: Falls off linearly to zero at `_LOCAL_RADIUS`.
+_LOCAL_STRENGTH = 4.0
+
+
+def diversity_weight(diversity: float) -> float:
+    """Map the 0..10 `--diversity` dial onto a Delta-E-per-reuse penalty."""
+    return max(0.0, float(diversity)) * _DIVERSITY_SCALE
+
+
+def _nearby_placements(
+    placed: dict[tuple[int, int], int], cell: CellDescriptor, radius: int
+) -> list[tuple[tuple[int, int], int]]:
+    """Already-placed cells within Chebyshev `radius` of `cell`.
+
+    Scans the neighbourhood rather than every prior placement, so the cost per
+    cell stays constant as the mosaic grows.
+    """
+    found = []
+    for row in range(cell.row - radius, cell.row + 1):
+        for col in range(cell.col - radius, cell.col + radius + 1):
+            tile_idx = placed.get((row, col))
+            if tile_idx is not None:
+                found.append(((row, col), tile_idx))
+    return found
+
+
 def _distances(cells: np.ndarray, tiles: np.ndarray) -> np.ndarray:
     """Euclidean (CIE76) distance matrix between cell and tile LAB vectors."""
     return np.sqrt(((cells[:, None, :] - tiles[None, :, :]) ** 2).sum(-1))
@@ -107,27 +150,34 @@ def match_grid(
     *,
     tile_side: int,
     db_path: str,
-    max_reuse: int = 0,
-    min_repeat_dist: int = 0,
+    diversity: float = _DEFAULT_DIVERSITY,
     show_progress: bool = False,
 ) -> MatchResult:
-    """Greedily assign the nearest acceptable tile to every cell of `grid`.
+    """Assign a tile to every cell of `grid`, trading colour fidelity for variety.
 
     `descriptors` is the list returned by `get_tile_lab_descriptors`; LAB is
     read from the keys `mean_L`, `mean_a` and `mean_bb` (note that `mean_b` is
     RGB blue, not LAB b*).
 
-    Cells are walked in row-major order. For each cell the tiles are considered
-    in ascending LAB distance and the first candidate satisfying both
-    constraints wins:
+    Cells are walked in row-major order. Each tile is costed as::
 
-    * `max_reuse` (> 0): the tile has been placed fewer than `max_reuse` times.
-    * `min_repeat_dist` (> 0): the tile has not been placed at any cell within
-      Chebyshev distance `min_repeat_dist` of this one.
+        cost = delta_e + diversity_weight(diversity) * penalty
 
-    A value of 0 disables the corresponding constraint. When no candidate
-    satisfies the constraints the unconstrained nearest tile is used instead;
-    this function never raises for an unsatisfiable constraint set.
+    where ``penalty`` is how many times the tile has already been placed
+    *relative to its fair share* (``cells / tiles``), plus an extra charge for
+    placements within `_LOCAL_RADIUS` cells of this one that falls off with
+    distance. The cheapest tile wins. A heavily reused tile can therefore still
+    be chosen when it is a markedly better colour match, which is the point:
+    `diversity` expresses a preference, not a constraint.
+
+    Scaling by fair share is what keeps a dial position meaning the same thing
+    across galleries. With fewer tiles than cells, repeats are unavoidable, and
+    charging for them from the first repeat would drown out colour distance.
+
+    `diversity` runs 0..10. At 0 this is plain nearest-colour matching. Higher
+    values buy variety at the cost of mean Delta-E; see the README's tradeoff
+    table. There is no unsatisfiable-constraint case to fall back from, so this
+    never silently ignores the setting.
     """
     if not descriptors:
         raise ValueError("No tiles in database")
@@ -143,9 +193,16 @@ def match_grid(
     n_tiles = tiles.shape[0]
     chunk_size = 1024 if n_cells * n_tiles > 20_000_000 else n_cells
 
-    constrained = max_reuse > 0 or min_repeat_dist > 0
-    usage: dict[tuple[int, int], int] = {}
-    placements: dict[tuple[int, int], list[tuple[int, int]]] = {}
+    weight = diversity_weight(diversity)
+    #: How often each tile must be placed if usage were spread perfectly. When
+    #: cells outnumber tiles this is large, and reuse is unavoidable — charging
+    #: for it from the first repeat would swamp colour distance and make the
+    #: choice effectively random. Measuring usage relative to this keeps a dial
+    #: position meaning the same thing on a 9-tile and a 14000-tile gallery.
+    fair_share = max(n_cells / n_tiles, 1e-9)
+    uses = np.zeros(n_tiles, dtype=np.float64)
+    #: Tile index placed at each (row, col), for the local-repeat lookup.
+    placed: dict[tuple[int, int], int] = {}
     matches: list[CellMatch] = []
 
     block: np.ndarray | None = None
@@ -157,25 +214,24 @@ def match_grid(
         dists = block[i - block_start]
         cell = grid.cells[i]
 
-        chosen: int | None = None
-        if constrained:
-            for candidate in np.argsort(dists):
-                key = keys[candidate]
-                if max_reuse > 0 and usage.get(key, 0) >= max_reuse:
-                    continue
-                if min_repeat_dist > 0 and any(
-                    max(abs(r - cell.row), abs(c - cell.col)) < min_repeat_dist
-                    for r, c in placements.get(key, ())
-                ):
-                    continue
-                chosen = int(candidate)
-                break
-        if chosen is None:
+        if weight <= 0.0:
             chosen = int(np.argmin(dists))
+        else:
+            penalty = uses / fair_share
+            for (row, col), tile_idx in _nearby_placements(placed, cell, _LOCAL_RADIUS):
+                distance = max(abs(row - cell.row), abs(col - cell.col))
+                falloff = (_LOCAL_RADIUS - distance + 1) / (_LOCAL_RADIUS + 1)
+                # Take the closest prior placement rather than summing them.
+                # Summing stacks up when few tiles are available, swamping
+                # colour distance; what actually reads badly is one repeat
+                # sitting near this cell, not several scattered in range.
+                local = _LOCAL_STRENGTH * falloff
+                penalty[tile_idx] = max(penalty[tile_idx], uses[tile_idx] / fair_share + local)
+            chosen = int(np.argmin(dists + weight * penalty))
 
+        uses[chosen] += 1.0
+        placed[(cell.row, cell.col)] = chosen
         key = keys[chosen]
-        usage[key] = usage.get(key, 0) + 1
-        placements.setdefault(key, []).append((cell.row, cell.col))
         matches.append(
             CellMatch(
                 row=cell.row,
@@ -247,8 +303,7 @@ def run_match(
     *,
     grain: int,
     tile_side: int | None = None,
-    max_reuse: int = 0,
-    min_repeat_dist: int = 0,
+    diversity: float = _DEFAULT_DIVERSITY,
     show_progress: bool = True,
 ) -> MatchResult:
     """Analyse `target_path` and match it against the tiles in `db_path`."""
@@ -276,8 +331,7 @@ def run_match(
         descriptors,
         tile_side=tile_side,
         db_path=str(db_path),
-        max_reuse=max_reuse,
-        min_repeat_dist=min_repeat_dist,
+        diversity=diversity,
         show_progress=show_progress,
     )
 
@@ -294,8 +348,12 @@ def build_parser(sub: argparse._SubParsersAction | None = None) -> argparse.Argu
     parser.add_argument("--db", type=Path, default=Path("mosaic.duckdb"))
     parser.add_argument("--grain", type=int, required=True, help="Cell edge length in target pixels")
     parser.add_argument("--tile-side", type=int, default=None)
-    parser.add_argument("--max-reuse", type=int, default=0, help="0 means unlimited reuse")
-    parser.add_argument("--min-repeat-dist", type=int, default=0, help="0 means no spacing constraint")
+    parser.add_argument(
+        "--diversity",
+        type=float,
+        default=3.0,
+        help="0-10: how much to favour tile variety over exact colour match (0 = pure match)",
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--no-progress", action="store_true", help="Disable progress output")
     parser.set_defaults(handler=run_from_args)
@@ -313,8 +371,7 @@ def run_from_args(args: argparse.Namespace) -> None:
         args.db,
         grain=args.grain,
         tile_side=args.tile_side,
-        max_reuse=args.max_reuse,
-        min_repeat_dist=args.min_repeat_dist,
+        diversity=args.diversity,
         show_progress=not args.no_progress,
     )
     save_match_result(result, args.out)

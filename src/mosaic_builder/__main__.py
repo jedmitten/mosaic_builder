@@ -28,8 +28,12 @@ def build_mosaic_parser(sub: argparse._SubParsersAction) -> argparse.ArgumentPar
     parser.add_argument("--db", type=Path, default=Path("mosaic.duckdb"))
     parser.add_argument("--grain", type=int, required=True, help="Cell edge length in target pixels")
     parser.add_argument("--tile-side", type=int, default=None)
-    parser.add_argument("--max-reuse", type=int, default=0, help="0 means unlimited reuse")
-    parser.add_argument("--min-repeat-dist", type=int, default=0, help="0 means no spacing constraint")
+    parser.add_argument(
+        "--diversity",
+        type=float,
+        default=3.0,
+        help="0-10: how much to favour tile variety over exact colour match (0 = pure match)",
+    )
     parser.add_argument(
         "--blend",
         type=float,
@@ -65,8 +69,7 @@ def run_mosaic_from_args(args: argparse.Namespace) -> None:
         db_path,
         grain=args.grain,
         tile_side=args.tile_side,
-        max_reuse=args.max_reuse,
-        min_repeat_dist=args.min_repeat_dist,
+        diversity=args.diversity,
         show_progress=show_progress,
     )
     if args.keep_match is not None:

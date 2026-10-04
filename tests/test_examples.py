@@ -34,8 +34,7 @@ REQUIRED_KEYS = {
     "target_size",
     "grain",
     "tile_side",
-    "max_reuse",
-    "min_repeat_dist",
+    "diversity",
     "blend",
     "rows",
     "cols",
@@ -96,6 +95,5 @@ def test_every_committed_file_is_under_its_size_ceiling():
 def test_cli_command_reflects_the_recorded_parameters():
     cli = SUMMARY["cli"]
     assert f"--grain {SUMMARY['grain']}" in cli
-    assert f"--max-reuse {SUMMARY['max_reuse']}" in cli
-    assert f"--min-repeat-dist {SUMMARY['min_repeat_dist']}" in cli
+    assert f"--diversity {SUMMARY['diversity']}" in cli
     assert SUMMARY["target"] in cli

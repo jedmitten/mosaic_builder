@@ -6,8 +6,7 @@
   ],
   "grain": 25,
   "tile_side": 64,
-  "max_reuse": 4,
-  "min_repeat_dist": 3,
+  "diversity": 3.0,
   "blend": 0.0,
   "rows": 30,
   "cols": 30,
@@ -15,9 +14,9 @@
     1920,
     1920
   ],
-  "mean_delta_e": 4.643,
-  "distinct_tiles": 281,
+  "mean_delta_e": 5.773,
+  "distinct_tiles": 699,
   "gallery_images": 480,
   "gallery_tiles": 1440,
-  "cli": "mosaic-builder mosaic examples/target_images/target_urinal_01.png --db mosaic.duckdb --grain 25 --tile-side 64 --max-reuse 4 --min-repeat-dist 3 --out examples/output/urinal_mosaic.png"
+  "cli": "mosaic-builder mosaic examples/target_images/target_urinal_01.png --db mosaic.duckdb --grain 25 --tile-side 64 --diversity 3.0 --out examples/output/urinal_mosaic.png"
 }
