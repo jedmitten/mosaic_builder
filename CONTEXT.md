@@ -68,7 +68,19 @@ Target image → matcher.py (analyze_target → match_grid) → MatchResult → 
   | 5 | 6.40 | 815 | 2 |
   | 10 | 7.04 | 889 | 2 |
 
-  The old hard caps needed a mean Delta-E of 13.92 — past the 12 rule of thumb — to reach 536 distinct tiles; the soft penalty reaches 587 at 5.34, because it only swaps where a near-equal tile exists instead of forcing every cell past its best match. Re-measure with `python -m mosaic_builder validate` after any change to tile extraction.
+  The old hard caps needed a mean Delta-E of 13.92 — past the 12 rule of thumb — to reach 536 distinct tiles; the soft penalty reaches 699 at 5.77, because it only swaps where a near-equal tile exists instead of forcing every cell past its best match. Re-measure with `python -m mosaic_builder validate` after any change to tile extraction.
+
+## Superseded Work (recoverable, not forgotten)
+
+On 2026-10-04 `main` was resolved in favour of this tree (PR #4, merged with the `ours` strategy). `main` had diverged into a *different codebase* rather than a variant of this one — `mosaic_builder/` holding `index/`, `pipeline/`, `stores/` and `config.py`, against `src/mosaic_builder/` with flat modules here. Only `README.md` and `pyproject.toml` actually conflicted; everything else sat at different paths, so an ordinary merge would have produced two directories claiming the same import name rather than a working tree.
+
+Dropped from the mainline, intact at commit `6d7042a` and on the `move-to-grid` branch:
+
+- **Grid tiling** (PR #3) — grids in tiling, with matching schema and CLI changes.
+- **Approximate nearest-neighbour index** — `index/` with brute-force, kd-tree, HNSW and FAISS backends behind a factory.
+- **A different layering** — `config.py`, `pipeline/`, `stores/sql_store.py` separating ingest and storage differently than the flat modules here.
+
+Why this matters later: matching here is brute-force LAB distance against every tile, which is comfortable at 1440 tiles and would not be at ten times that. If gallery size becomes the constraint, recover the index work above rather than rebuilding it. Nothing in the current architecture precludes it — `match_grid` already receives a plain list of descriptors and could be handed an index instead.
 
 ## Non-Goals (for now)
 
@@ -84,5 +96,6 @@ Target image → matcher.py (analyze_target → match_grid) → MatchResult → 
 3. **Render-time tinting** — nudge each tile toward its cell's mean color to hide residual color error.
 4. **Proper multi-tile-side support** — today one database holds one tile side; the write path would need to delete per `(image_id, tile_side)` rather than per image.
 5. **Replace the gallery symlink** — a configurable gallery path so the notebook and README do not depend on one machine's layout.
+6. **Approximate nearest-neighbour matching** — only once brute-force LAB distance stops being fast enough. Recover the `index/` subsystem described under Superseded Work instead of writing a new one.
 
 Keep this file up to date as the project evolves.
