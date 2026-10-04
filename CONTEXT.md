@@ -14,7 +14,7 @@
 - **`tiler.py`** — Image loading (EXIF-aware), character tile extraction (texture-scored square crops), resizing, mean RGB, mean LAB, and CIE76 `delta_e`.
 - **`ingest.py`** — Gallery ingestion into DuckDB. Per-image transactions with rollback on failure. Returns `IngestSummary`.
 - **`preview.py`** — HTML preview generation. Reads from the database; never re-ingests.
-- **`matcher.py`** — Target analysis (`analyze_target` builds a grid of per-cell LAB descriptors) and greedy assignment (`match_grid`) under reuse and spacing constraints. Results serialize to `match.json`.
+- **`matcher.py`** — Target analysis (`analyze_target` builds a grid of per-cell LAB descriptors) and assignment (`match_grid`) minimising `delta_e + weight x reuse penalty`, where `--diversity` sets the weight. Results serialize to `match.json`.
 - **`renderer.py`** — Mosaic assembly from a match result, with optional alpha blending toward the target.
 - **`validate.py`** — Read-only gallery quality report: LAB ranges, nearest-neighbour diversity, coverage histogram, lowest-texture tiles.
 - **`progress.py`** — The single text progress-bar helper shared by ingest, match, and render.
@@ -40,10 +40,10 @@ Target image → matcher.py (analyze_target → match_grid) → MatchResult → 
    Extracting up to three maximal square crops per photo (scoring by texture/contrast) preserves the photographed "character" better than a single average crop. Each tile is resized uniformly afterward.
 
 2. **Perceptual Metrics for Fast-Fail**
-   Delta-E in LAB is the matching distance. Tiles drifting beyond roughly 12 Delta-E from their target typically feel off. Supporting metrics (entropy, colorfulness, coverage) help diagnose why.
+   Delta-E in LAB is the matching distance. Tiles drifting beyond roughly 12 Delta-E from their target typically feel off. Supporting per-tile metrics help diagnose why: `coverage`, texture `score`, `color_contrast` and `periodicity` are measured at ingest and stored; the composite fixture likelihood is derived from them on read. README's "What the tile scores mean" explains each in plain terms. (Entropy and colorfulness were considered as supporting metrics but never implemented.)
 
 3. **Grain & Diversity Controls**
-   Greedy raster-order matching plus grid knobs (grain, min-repeat distance, max reuse) are enough for early experiments. More sophisticated solvers can wait until real failures appear.
+   Greedy raster-order matching plus a continuous `--diversity` dial are enough for early experiments. The dial is a soft cost, not a constraint: a reused tile still wins when it is a markedly better colour match, and the penalty is scaled by each tile's fair share (`cells / tiles`) so that forced repeats on a small gallery do not swamp colour distance. More sophisticated solvers can wait until real failures appear.
 
 4. **Tooling over Ad Hoc Scripts**
    Standalone analyzers made it easy to score galleries before committing to large ingests. `validate` is the CLI form of that idea.
@@ -57,18 +57,18 @@ Target image → matcher.py (analyze_target → match_grid) → MatchResult → 
 ## Measured Characteristics (480 photos, 1440 tiles, tile_side 64)
 
 - Mean nearest-neighbour Delta-E between tiles is **1.06**, or **1.46** ignoring tiles from the same photo. Only **125 of 1440** tiles sit more than 3 Delta-E from their nearest neighbour in a different photo. The gallery is tightly clustered in color space.
-- Consequences: reuse and spacing constraints are cheap to satisfy because substitutes are plentiful, and mean color alone is nearly exhausted as a discriminator.
-- The quality-versus-variety tradeoff on a 32x32 grid:
+- Consequences: substitutes are plentiful, so diversity is cheap to buy — which is exactly why the soft `--diversity` penalty beats the hard reuse/spacing caps it replaced. Mean color alone is nearly exhausted as a discriminator.
+- The quality-versus-variety tradeoff, measured on the urinal target at grain 25 (30x30 grid, 900 cells):
 
-  | Settings | Mean Delta-E | Distinct tiles |
-  |---|---|---|
-  | unconstrained | 4.88 | 95 |
-  | `--min-repeat-dist 5` | 8.12 | 193 |
-  | `--max-reuse 4 --min-repeat-dist 3` | 12.00 | 314 |
-  | `--max-reuse 2 --min-repeat-dist 2` | 13.92 | 536 |
-  | `--max-reuse 1` | 17.87 | 1024 |
+  | `--diversity` | Mean Delta-E | Distinct tiles | Most-reused tile |
+  |---|---|---|---|
+  | 0 | 3.24 | 76 | 138 cells |
+  | 1 | 4.82 | 467 | 6 |
+  | 3 (default) | 5.77 | 699 | 3 |
+  | 5 | 6.40 | 815 | 2 |
+  | 10 | 7.04 | 889 | 2 |
 
-  Pushing past roughly 300 distinct tiles crosses the 12 Delta-E rule of thumb. Re-measure with `python -m mosaic_builder validate` after any change to tile extraction.
+  The old hard caps needed a mean Delta-E of 13.92 — past the 12 rule of thumb — to reach 536 distinct tiles; the soft penalty reaches 587 at 5.34, because it only swaps where a near-equal tile exists instead of forcing every cell past its best match. Re-measure with `python -m mosaic_builder validate` after any change to tile extraction.
 
 ## Non-Goals (for now)
 
