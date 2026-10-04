@@ -1,63 +1,37 @@
-from pathlib import Path
+"""Shared test helpers.
 
-import cv2
-import numpy as np
-import pytest
+``make_tile`` is the single place tests build a tile dict for
+``upsert_tiles``, so adding a column to ``duckdb_store.TILE_COLUMNS`` means
+updating one default here rather than every test module.
+"""
 
+from __future__ import annotations
 
-def get_project_root() -> Path:
-    return Path(__file__).parent.parent
+from mosaic_builder.duckdb_store import TILE_COLUMNS
 
-
-def show_debug_image(image, name="Test Image", delay_ms=500):
-    """Display image for debugging with fixed delay."""
-    cv2.imshow(name, image)
-    cv2.waitKey(delay_ms)
-    cv2.destroyAllWindows()
-
-
-@pytest.fixture
-def debug_show():
-    """Fixture to provide debug image display function."""
-    return show_debug_image
-
-
-def pytest_addoption(parser):
-    parser.addoption(
-        "--show-images",
-        action="store_true",
-        default=False,
-        help="Show test images during test execution",
-    )
+#: Defaults for every ``TILE_COLUMNS`` entry except ``image_id``, which
+#: ``upsert_tiles`` supplies from its own argument.
+_TILE_DEFAULTS: dict = {
+    "tile_side": 32,
+    "tile_index": 0,
+    "crop_box": "0,0,32,32",
+    "coverage": 0.5,
+    "score": 1.0,
+    "mean_r": 100.0,
+    "mean_g": 50.0,
+    "mean_b": 25.0,
+    "mean_L": 45.0,
+    "mean_a": 12.0,
+    "mean_bb": -8.0,
+    "color_contrast": 0.0,
+    "periodicity": 0.0,
+    "tile_png": b"\x89PNG",
+}
 
 
-@pytest.fixture
-def show_images(request):
-    return request.config.getoption("--show-images")
-
-
-@pytest.fixture
-def gallery():
-    return Path(get_project_root() / "gallery/Views from the urinal")
-
-
-@pytest.fixture
-def gallery_files(gallery):
-    return list(gallery.glob("*"))
-
-
-@pytest.fixture
-def image_02(gallery_files):
-    return cv2.imread(gallery_files[0])
-
-
-@pytest.fixture
-def known_color_image():
-    # Create 2x2 image with known colors
-    img = np.zeros((2, 2, 3), dtype=np.uint8)
-    # Set pixels to known values
-    img[0, 0] = [0, 0, 255]  # pure blue
-    img[0, 1] = [0, 255, 0]  # pure green
-    img[1, 0] = [255, 0, 0]  # pure red
-    img[1, 1] = [255, 255, 255]  # white
-    return img
+def make_tile(**overrides) -> dict:
+    """Return a complete tile dict, with any field overridden by keyword."""
+    missing = {c.name for c in TILE_COLUMNS} - {"image_id"} - _TILE_DEFAULTS.keys()
+    if missing:
+        raise AssertionError(f"_TILE_DEFAULTS needs entries for new schema columns: {sorted(missing)}")
+    return {**_TILE_DEFAULTS, **overrides}

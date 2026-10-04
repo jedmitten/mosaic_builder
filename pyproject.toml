@@ -1,81 +1,44 @@
+[project]
+name = "mosaic-builder"
+version = "0.0.1"
+description = "A toolkit to build mosaic images from a gallery"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy",
+  "pillow",
+  "duckdb",
+  "scikit-image>=0.25.2",
+]
+[project.scripts]
+mosaic-builder = "mosaic_builder.__main__:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[project]
-name = "mosaic-builder"
-version = "0.1.2"
-description = "A python library for reading photos and building mosaics"
-readme = "README.md"
-requires-python = ">=3.10"
-dependencies = [
-  "joblib>=1.5.1",
-  "numpy>=1.26", # explicit, even if pulled by others
-  "pillow>=11.0.0",
-  "scikit-image>=0.25.2",
-  "scipy>=1.13.0", # for scipy.spatial.cKDTree
-  "typer>=0.16.1",
-]
 
-authors = [
-  {name = "Jed Mitten", email = "jedmitten+mosaics@gmail.com"},
-]
-license = {text = "MIT"}
-
-[project.scripts]
-mosaic-builder = "mosaic_builder.cli:app"
-
-[project.optional-dependencies]
-# ANN backends (opt-in). Split so users can pick.
-ann-faiss = ["faiss-cpu>=1.7.4; platform_system != 'Windows'"]
-ann-hnsw = ["hnswlib>=0.8.0"]
-
-# Analytics / catalogs (opt-in)
-analytics = [
-  "duckdb>=1.3",
-  "pandas>=2.2.3",
-]
-debug = ["matplotlib>=3.9.0"]
-
-[project.urls]
-Homepage = "https://your-project-homepage-url.example.com"
-
-[tool.hatch.metadata]
-allow-direct-references = true
-
-[tool.hatch.build.targets.sdist]
-include = ["mosaic_builder/**", "README.md", "pyproject.toml"]
+[tool.uv]
+package = true
 
 [dependency-groups]
 dev = [
-  "pytest>=8.3.4",
-  "pytest-cov>=6.0.0",
-  "pytest-xdist>=3.6.1",
-  "black>=24.10.0",
-  "ruff>=0.6.9",
-  "pre-commit>=4.0.1",
-  "mypy>=1.10.0",
-  "pytest-sugar>=1.0.0",
-  "isort>=6.0.0",
+    "ipykernel>=6.30.0",
+    "nbconvert>=7.17.0",
+    "nbstripout>=0.8.1",
+    "pre-commit>=4.4.0",
+    "pytest>=9.0.2",
+    "pytest-sugar>=1.1.1",
+    "ruff>=0.14.0",
 ]
 
-[tool.black]
-line-length = 120
-target-version = ["py310"]
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.ruff]
-line-length = 120
+line-length = 110
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "I"]
-# because I'm using Lab for images, which has single-letter variable names
-ignore = ["E741"]
-
-[tool.mypy]
-python_version = "3.10"
-ignore_missing_imports = true
-warn_unused_ignores = true
-warn_redundant_casts = true
-warn_unused_configs = true
-strict_optional = false
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]

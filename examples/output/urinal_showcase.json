@@ -1,0 +1,22 @@
+{
+  "target": "examples/target_images/target_urinal_01.png",
+  "target_size": [
+    750,
+    750
+  ],
+  "grain": 25,
+  "tile_side": 64,
+  "diversity": 3.0,
+  "blend": 0.0,
+  "rows": 30,
+  "cols": 30,
+  "mosaic_size": [
+    1920,
+    1920
+  ],
+  "mean_delta_e": 5.773,
+  "distinct_tiles": 699,
+  "gallery_images": 480,
+  "gallery_tiles": 1440,
+  "cli": "mosaic-builder mosaic examples/target_images/target_urinal_01.png --db mosaic.duckdb --grain 25 --tile-side 64 --diversity 3.0 --out examples/output/urinal_mosaic.png"
+}
