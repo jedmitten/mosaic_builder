@@ -1,3 +1,4 @@
+import math
 import tempfile
 from pathlib import Path
 from unittest import TestCase
@@ -47,6 +48,9 @@ class IngestPreviewTest(TestCase):
                         self.assertEqual(tile["tile_side"], tile_side)
                         self.assertIsInstance(tile["tile_png"], bytes)
                         self.assertGreater(len(tile["tile_png"]), 0)
+                        for key in ("score", "color_contrast", "periodicity"):
+                            self.assertIsInstance(tile[key], float)
+                            self.assertTrue(math.isfinite(tile[key]))
             finally:
                 conn.close()
 

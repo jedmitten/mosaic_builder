@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
 import duckdb
 
-#: Bump whenever ``SCHEMA_STATEMENTS`` changes shape. There are no migrations:
-#: a mismatch means "delete the .duckdb file and re-ingest".
-SCHEMA_VERSION: int = 2
+#: Bump whenever :data:`TILE_COLUMNS` (or any other schema statement) changes
+#: shape. There are no migrations: a mismatch means "delete the .duckdb file
+#: and re-ingest". That is cheap because the database is a derived cache — the
+#: photo gallery is the source of truth.
+SCHEMA_VERSION: int = 4
 
 #: Key used in the ``schema_meta`` table to store :data:`SCHEMA_VERSION`.
 _SCHEMA_VERSION_KEY = "schema_version"
@@ -17,6 +20,66 @@ _SCHEMA_VERSION_KEY = "schema_version"
 
 class SchemaVersionError(RuntimeError):
     """Raised when a database's schema does not match :data:`SCHEMA_VERSION`."""
+
+
+@dataclass(frozen=True)
+class TileColumn:
+    """One column of the ``tiles`` table."""
+
+    name: str
+    sql_type: str
+    #: Large payload: excluded from descriptor reads and wrapped in ``bytes()``.
+    blob: bool = False
+
+
+#: The single source of truth for the ``tiles`` table. The DDL, both SELECT
+#: column lists, the row-to-dict mapping, and the INSERT statement are all
+#: derived from this tuple, so adding a per-tile feature means adding one entry
+#: here (plus supplying the value in ingest.py) and bumping SCHEMA_VERSION.
+#:
+#: Only *measured* values belong here. Scores derived from other columns plus
+#: tunable constants — e.g. tiler.fixture_likelihood_score — are deliberately
+#: not stored: they are computed on read so retuning a constant takes effect
+#: without re-ingesting.
+TILE_COLUMNS: tuple[TileColumn, ...] = (
+    TileColumn("image_id", "INTEGER"),
+    TileColumn("tile_side", "INTEGER"),
+    TileColumn("tile_index", "INTEGER"),
+    TileColumn("crop_box", "TEXT"),
+    TileColumn("coverage", "REAL"),
+    TileColumn("score", "REAL"),
+    TileColumn("mean_r", "REAL"),
+    TileColumn("mean_g", "REAL"),
+    TileColumn("mean_b", "REAL"),
+    TileColumn("mean_L", "REAL"),
+    TileColumn("mean_a", "REAL"),
+    TileColumn("mean_bb", "REAL"),
+    TileColumn("color_contrast", "REAL"),
+    TileColumn("periodicity", "REAL"),
+    TileColumn("tile_png", "BLOB", blob=True),
+)
+
+#: Columns of the composite primary key, in order.
+_TILE_PRIMARY_KEY: tuple[str, ...] = ("image_id", "tile_side", "tile_index")
+
+#: Columns returned by descriptor reads (everything except large blobs).
+TILE_DESCRIPTOR_COLUMNS: tuple[TileColumn, ...] = tuple(c for c in TILE_COLUMNS if not c.blob)
+
+
+def _column_list(columns: Iterable[TileColumn]) -> str:
+    """Comma-joined column names for a SELECT/INSERT list."""
+    return ", ".join(c.name for c in columns)
+
+
+def _tiles_ddl() -> str:
+    """Build the ``tiles`` CREATE TABLE from :data:`TILE_COLUMNS`."""
+    definitions = ",\n        ".join(f"{c.name} {c.sql_type} NOT NULL" for c in TILE_COLUMNS)
+    return f"""
+    CREATE TABLE IF NOT EXISTS tiles (
+        {definitions},
+        PRIMARY KEY ({", ".join(_TILE_PRIMARY_KEY)})
+    );
+    """
 
 
 SCHEMA_STATEMENTS: tuple[str, ...] = (
@@ -32,24 +95,7 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """,
-    """
-    CREATE TABLE IF NOT EXISTS tiles (
-        image_id INTEGER NOT NULL,
-        tile_side INTEGER NOT NULL,
-        tile_index INTEGER NOT NULL,
-        crop_box TEXT NOT NULL,
-        coverage REAL NOT NULL,
-        score REAL NOT NULL,
-        mean_r REAL NOT NULL,
-        mean_g REAL NOT NULL,
-        mean_b REAL NOT NULL,
-        mean_L REAL NOT NULL,
-        mean_a REAL NOT NULL,
-        mean_bb REAL NOT NULL,
-        tile_png BLOB NOT NULL,
-        PRIMARY KEY (image_id, tile_side, tile_index)
-    );
-    """,
+    _tiles_ddl(),
     """
     CREATE TABLE IF NOT EXISTS schema_meta (
         key VARCHAR PRIMARY KEY,
@@ -59,38 +105,22 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
     """,
 )
 
-# Column lists used by read helpers (kept DRY)
-_TILE_COLS = (
-    "image_id, tile_side, tile_index, crop_box, coverage, score, "
-    "mean_r, mean_g, mean_b, mean_L, mean_a, mean_bb, tile_png"
-)
-_TILE_COLS_NO_PNG = (
-    "image_id, tile_side, tile_index, crop_box, coverage, score, "
-    "mean_r, mean_g, mean_b, mean_L, mean_a, mean_bb"
-)
+# Column lists used by read helpers
+_TILE_COLS = _column_list(TILE_COLUMNS)
+_TILE_COLS_NO_PNG = _column_list(TILE_DESCRIPTOR_COLUMNS)
 
-#: Every column the current schema expects on ``tiles`` (13 names).
-EXPECTED_TILE_COLUMNS: frozenset[str] = frozenset(c.strip() for c in _TILE_COLS.split(","))
+#: Every column the current schema expects on ``tiles``.
+EXPECTED_TILE_COLUMNS: frozenset[str] = frozenset(c.name for c in TILE_COLUMNS)
 
 
 def _tile_row_to_dict(r: tuple, *, has_png: bool = True) -> dict:
-    d = {
-        "image_id": r[0],
-        "tile_side": r[1],
-        "tile_index": r[2],
-        "crop_box": r[3],
-        "coverage": r[4],
-        "score": r[5],
-        "mean_r": r[6],
-        "mean_g": r[7],
-        "mean_b": r[8],
-        "mean_L": r[9],
-        "mean_a": r[10],
-        "mean_bb": r[11],
-    }
-    if has_png:
-        d["tile_png"] = bytes(r[12])
-    return d
+    """Map a row tuple onto column names.
+
+    Zips against :data:`TILE_COLUMNS` rather than indexing by position, so
+    inserting a column cannot silently shift values into the wrong keys.
+    """
+    columns = TILE_COLUMNS if has_png else TILE_DESCRIPTOR_COLUMNS
+    return {c.name: bytes(value) if c.blob else value for c, value in zip(columns, r, strict=True)}
 
 
 def normalize_db_path(db: str | Path) -> Path:
@@ -368,26 +398,15 @@ def upsert_tiles(
     image_id: int,
     tiles: list[dict],
 ) -> None:
-    """Insert tiles for an image. Expects tiles already deleted via cascade."""
+    """Insert tiles for an image. Expects tiles already deleted via cascade.
+
+    Every column in :data:`TILE_COLUMNS` except ``image_id`` must be present in
+    each tile dict; a missing key raises ``KeyError`` naming the column.
+    """
+    placeholders = ", ".join(["?"] * len(TILE_COLUMNS))
+    statement = f"INSERT INTO tiles ({_TILE_COLS}) VALUES ({placeholders})"
     for t in tiles:
         conn.execute(
-            """INSERT INTO tiles
-               (image_id, tile_side, tile_index, crop_box, coverage, score,
-                mean_r, mean_g, mean_b, mean_L, mean_a, mean_bb, tile_png)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            [
-                image_id,
-                t["tile_side"],
-                t["tile_index"],
-                t["crop_box"],
-                t["coverage"],
-                t["score"],
-                t["mean_r"],
-                t["mean_g"],
-                t["mean_b"],
-                t["mean_L"],
-                t["mean_a"],
-                t["mean_bb"],
-                t["tile_png"],
-            ],
+            statement,
+            [image_id if c.name == "image_id" else t[c.name] for c in TILE_COLUMNS],
         )

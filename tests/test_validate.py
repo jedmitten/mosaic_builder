@@ -3,7 +3,10 @@ import tempfile
 from pathlib import Path
 from unittest import TestCase
 
+from conftest import make_tile
+
 from mosaic_builder.duckdb_store import ensure_schema, open_database, upsert_image, upsert_tiles
+from mosaic_builder.tiler import fixture_likelihood_score
 from mosaic_builder.validate import gallery_report
 
 
@@ -14,33 +17,7 @@ def _make_conn(tmp: str) -> "object":
     return conn
 
 
-def _tile(
-    *,
-    tile_index: int = 0,
-    tile_side: int = 32,
-    coverage: float = 0.5,
-    score: float = 1.0,
-    mean_r: float = 100.0,
-    mean_g: float = 50.0,
-    mean_b: float = 25.0,
-    mean_L: float = 45.0,
-    mean_a: float = 12.0,
-    mean_bb: float = -8.0,
-) -> dict:
-    return {
-        "tile_side": tile_side,
-        "tile_index": tile_index,
-        "crop_box": "0,0,32,32",
-        "coverage": coverage,
-        "score": score,
-        "mean_r": mean_r,
-        "mean_g": mean_g,
-        "mean_b": mean_b,
-        "mean_L": mean_L,
-        "mean_a": mean_a,
-        "mean_bb": mean_bb,
-        "tile_png": b"\x89PNG",
-    }
+_tile = make_tile
 
 
 class GalleryReportTest(TestCase):
@@ -58,6 +35,7 @@ class GalleryReportTest(TestCase):
             self.assertEqual(report["lab_ranges"], {"L": None, "a": None, "b": None})
             self.assertIsNone(report["mean_nearest_neighbor_delta_e"])
             self.assertEqual(report["low_texture_tiles"], [])
+            self.assertEqual(report["fixture_candidate_tiles"], [])
             self.assertEqual(sum(report["coverage_histogram"].values()), 0)
 
     def test_mean_nearest_neighbor_delta_e_two_tiles(self):
@@ -133,6 +111,35 @@ class GalleryReportTest(TestCase):
                 conn.close()
 
             self.assertIsNone(report["mean_nearest_neighbor_delta_e"])
+
+    def test_fixture_candidate_tiles_ordering(self):
+        """The composite is computed from stored primitives, not stored itself."""
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = _make_conn(tmp)
+            try:
+                image_id = upsert_image(conn, "img.png", 64, 64)
+                upsert_tiles(
+                    conn,
+                    image_id,
+                    [
+                        # Strongly bimodal: colour dominates, scores high.
+                        _tile(tile_index=0, score=1.0, color_contrast=2000.0, periodicity=0.1),
+                        # Low contrast but highly periodic: reads as wall, scores low.
+                        _tile(tile_index=1, score=1.0, color_contrast=5.0, periodicity=0.9),
+                    ],
+                )
+                report = gallery_report(conn)
+            finally:
+                conn.close()
+
+            candidates = report["fixture_candidate_tiles"]
+            self.assertEqual(candidates[0][1], 0)  # tile_index 0 ranked first
+            self.assertGreater(candidates[0][2], candidates[1][2])
+            self.assertAlmostEqual(
+                candidates[0][2],
+                fixture_likelihood_score(1.0, 2000.0, 0.1),
+                places=6,
+            )
 
     def test_report_is_json_serialisable(self):
         with tempfile.TemporaryDirectory() as tmp:

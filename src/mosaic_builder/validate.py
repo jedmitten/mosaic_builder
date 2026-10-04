@@ -17,6 +17,7 @@ from .duckdb_store import (
     get_tile_sides,
     open_database,
 )
+from .tiler import fixture_likelihood_score
 
 #: Above this many tiles, the pairwise distance matrix is computed in row
 #: chunks instead of all at once, to bound peak memory.
@@ -28,6 +29,7 @@ _MAX_TILES_FULL_MATRIX = 5000
 _COVERAGE_BUCKETS = ("[0, 0.25)", "[0.25, 0.5)", "[0.5, 0.75)", "[0.75, 1.0]")
 
 _LOW_TEXTURE_N = 10
+_FIXTURE_CANDIDATE_N = 10
 
 
 def _lab_ranges(descriptors: list[dict]) -> dict[str, list[float] | None]:
@@ -96,6 +98,28 @@ def _low_texture_tiles(descriptors: list[dict]) -> list[tuple[int, int, float]]:
     return [(int(d["image_id"]), int(d["tile_index"]), float(d["score"])) for d in ordered]
 
 
+def _fixture_candidate_tiles(descriptors: list[dict]) -> list[tuple[int, int, float, float, float]]:
+    """The `_FIXTURE_CANDIDATE_N` most fixture-like tiles, descending.
+
+    The composite score is computed here rather than stored, so retuning the
+    constants in :mod:`tiler` takes effect without re-ingesting the gallery.
+    Returns (image_id, tile_index, fixture_score, color_contrast, periodicity)
+    so the report surfaces *why* a tile ranked high, not just that it did.
+    """
+    scored = [
+        (
+            int(d["image_id"]),
+            int(d["tile_index"]),
+            fixture_likelihood_score(float(d["score"]), float(d["color_contrast"]), float(d["periodicity"])),
+            float(d["color_contrast"]),
+            float(d["periodicity"]),
+        )
+        for d in descriptors
+    ]
+    scored.sort(key=lambda row: row[2], reverse=True)
+    return scored[:_FIXTURE_CANDIDATE_N]
+
+
 def gallery_report(conn, *, tile_side: int | None = None) -> dict:
     """Build a read-only gallery/tile quality report.
 
@@ -118,6 +142,7 @@ def gallery_report(conn, *, tile_side: int | None = None) -> dict:
         "mean_nearest_neighbor_delta_e": _mean_nearest_neighbor_delta_e(descriptors),
         "coverage_histogram": _coverage_histogram(descriptors),
         "low_texture_tiles": _low_texture_tiles(descriptors),
+        "fixture_candidate_tiles": _fixture_candidate_tiles(descriptors),
     }
 
 
@@ -143,6 +168,15 @@ def _format_report(report: dict) -> str:
     if report["low_texture_tiles"]:
         for image_id, tile_index, score in report["low_texture_tiles"]:
             lines.append(f"  ({image_id}, {tile_index}, {score:.3f})")
+    else:
+        lines.append("  (none)")
+
+    lines.append(
+        "Top fixture-candidate tiles (image_id, tile_index, fixture_score, color_contrast, periodicity):"
+    )
+    if report["fixture_candidate_tiles"]:
+        for image_id, tile_index, fixture_score, cc, per in report["fixture_candidate_tiles"]:
+            lines.append(f"  ({image_id}, {tile_index}, {fixture_score:.3f}, {cc:.3f}, {per:.3f})")
     else:
         lines.append("  (none)")
 

@@ -8,6 +8,7 @@ dependencies = [
   "numpy",
   "pillow",
   "duckdb",
+  "scikit-image>=0.25.2",
 ]
 [project.scripts]
 mosaic-builder = "mosaic_builder.__main__:main"

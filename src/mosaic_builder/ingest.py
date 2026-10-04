@@ -10,11 +10,13 @@ from .cli import cli_errors
 from .duckdb_store import ensure_schema, open_database, upsert_image, upsert_tiles
 from .progress import iter_with_progress
 from .tiler import (
+    color_contrast_score,
     extract_character_tiles,
     iter_gallery_images,
     load_image,
     mean_lab,
     mean_rgb,
+    periodicity_score,
     resize_tile,
     tile_png_bytes,
 )
@@ -51,7 +53,10 @@ def ingest_gallery(
 
             conn.execute("BEGIN TRANSACTION")
             try:
-                image_id = upsert_image(conn, str(image_path), w, h)
+                # Resolve before storing: a relative path is only meaningful
+                # from the directory ingest happened to run in, which breaks
+                # every later reader that has a different working directory.
+                image_id = upsert_image(conn, str(image_path.resolve()), w, h)
                 raw_tiles = extract_character_tiles(base, max_tiles=max_tiles)
                 tile_dicts = []
                 for idx, tile_crop in enumerate(raw_tiles):
@@ -61,6 +66,8 @@ def ingest_gallery(
                     coverage = float(crop_area / image_area) if image_area > 0 else 0.0
                     r, g, b = mean_rgb(resized)
                     L, a, bb = mean_lab(resized)
+                    cc = color_contrast_score(resized)
+                    per = periodicity_score(resized)
                     tile_dicts.append(
                         {
                             "tile_side": tile_side,
@@ -74,6 +81,8 @@ def ingest_gallery(
                             "mean_L": float(L),
                             "mean_a": float(a),
                             "mean_bb": float(bb),
+                            "color_contrast": float(cc),
+                            "periodicity": float(per),
                             "tile_png": tile_png_bytes(resized),
                         }
                     )

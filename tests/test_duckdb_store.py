@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest import TestCase
 
 import duckdb
+from conftest import make_tile
 
 from mosaic_builder.duckdb_store import (
     ensure_schema,
@@ -29,20 +30,7 @@ def _make_conn(tmp: str) -> duckdb.DuckDBPyConnection:
 
 def _sample_tile(*, tile_index: int = 0, tile_png: bytes = b"\x89PNG", tile_side: int = 32) -> dict:
     """Return a minimal valid tile dict with LAB fields."""
-    return {
-        "tile_side": tile_side,
-        "tile_index": tile_index,
-        "crop_box": "0,0,32,32",
-        "coverage": 0.5,
-        "score": 1.0,
-        "mean_r": 100.0,
-        "mean_g": 50.0,
-        "mean_b": 25.0,
-        "mean_L": 45.0,
-        "mean_a": 12.0,
-        "mean_bb": -8.0,
-        "tile_png": tile_png,
-    }
+    return make_tile(tile_index=tile_index, tile_png=tile_png, tile_side=tile_side)
 
 
 class DuckDBStoreTest(TestCase):

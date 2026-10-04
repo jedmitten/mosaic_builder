@@ -13,6 +13,7 @@ from .duckdb_store import (
     get_tiles_for_image,
     open_database,
 )
+from .tiler import fixture_likelihood_score
 
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
@@ -42,11 +43,16 @@ def _tile_data_url(tile_png: bytes) -> str:
     return f"data:image/png;base64,{encoded}"
 
 
+def _fixture_score(tile: dict) -> float:
+    """Composite fixture likelihood, computed on read (never stored)."""
+    return fixture_likelihood_score(tile["score"], tile["color_contrast"], tile["periodicity"])
+
+
 def _render_block(image: dict, tiles: list[dict]) -> str:
     tiles_html = "\n".join(
         f"""<div class="tile-card">
         <img src="{_tile_data_url(tile["tile_png"])}" alt="tile {tile["tile_index"]}" />
-        <div class="meta">#{tile["tile_index"] + 1}<br/>{tile["tile_side"]}px<br/>coverage {tile["coverage"]:.2f}<br/>score {tile["score"]:.2f}</div>
+        <div class="meta">#{tile["tile_index"] + 1}<br/>{tile["tile_side"]}px<br/>coverage {tile["coverage"]:.2f}<br/>score {tile["score"]:.2f}<br/>fixture {_fixture_score(tile):.2f}</div>
       </div>"""
         for tile in tiles
     )

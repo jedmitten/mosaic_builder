@@ -4,6 +4,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from conftest import make_tile
 from PIL import Image
 
 from mosaic_builder import renderer
@@ -24,20 +25,19 @@ def _png_bytes(color: tuple[int, int, int], side: int) -> bytes:
 def _tile(
     *, tile_index: int, color: tuple[int, int, int], tile_side: int, png_side: int | None = None
 ) -> dict:
-    return {
-        "tile_side": tile_side,
-        "tile_index": tile_index,
-        "crop_box": f"0,0,{tile_side},{tile_side}",
-        "coverage": 1.0,
-        "score": 1.0,
-        "mean_r": float(color[0]),
-        "mean_g": float(color[1]),
-        "mean_b": float(color[2]),
-        "mean_L": 50.0,
-        "mean_a": 0.0,
-        "mean_bb": 0.0,
-        "tile_png": _png_bytes(color, png_side or tile_side),
-    }
+    return make_tile(
+        tile_side=tile_side,
+        tile_index=tile_index,
+        crop_box=f"0,0,{tile_side},{tile_side}",
+        coverage=1.0,
+        mean_r=float(color[0]),
+        mean_g=float(color[1]),
+        mean_b=float(color[2]),
+        mean_L=50.0,
+        mean_a=0.0,
+        mean_bb=0.0,
+        tile_png=_png_bytes(color, png_side or tile_side),
+    )
 
 
 def _make_db(tmp: str, tiles: list[dict], *, name: str = "tiles.duckdb") -> duckdb.DuckDBPyConnection:
